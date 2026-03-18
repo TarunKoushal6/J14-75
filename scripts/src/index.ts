@@ -48,9 +48,12 @@ const VALIDATION_REGISTRY_ABI = [
     stateMutability: "view",
     inputs: [{ name: "requestHash", type: "bytes32" }],
     outputs: [
-      { name: "score", type: "uint8" },
-      { name: "passed", type: "bool" },
+      { name: "validator", type: "address" },
+      { name: "agentId", type: "uint256" },
+      { name: "score", type: "uint256" },
+      { name: "status", type: "uint256" },
       { name: "notes", type: "string" },
+      { name: "timestamp", type: "uint256" },
     ],
   },
 ] as const;
@@ -377,13 +380,16 @@ async function main() {
     client: publicClient,
   });
 
-  const [score, passed, notes] =
+  const [validatorAddr, returnedAgentId, score, status, notes, timestamp] =
     await validationContract.read.getValidationStatus([requestHash]);
 
   console.log(`\n--- Validation Result ---`);
-  console.log(`  Score:  ${score}`);
-  console.log(`  Passed: ${passed}`);
-  console.log(`  Notes:  ${notes}`);
+  console.log(`  Validator:  ${validatorAddr}`);
+  console.log(`  Agent ID:   ${returnedAgentId.toString()}`);
+  console.log(`  Score:      ${score.toString()}`);
+  console.log(`  Status:     ${status.toString()}`);
+  console.log(`  Notes:      ${notes}`);
+  console.log(`  Timestamp:  ${new Date(Number(timestamp) * 1000).toISOString()}`);
 
   // ----------------------------------------------------------
   // Done
@@ -395,8 +401,8 @@ async function main() {
     validatorAddress: validatorWallet.address,
     tokenURI: tokenURIValue,
     onChainOwner,
-    validationScore: score,
-    validationPassed: passed,
+    validationScore: score.toString(),
+    validationStatus: status.toString(),
     validationNotes: notes,
   });
 }
