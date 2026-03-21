@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "J14-75 AI Agent"
+version = "1.0.0"
+id = "artifacts/j14-75"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22935
+
+[services.development]
+run = "pnpm --filter @workspace/j14-75 run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/j14-75", "run", "build" ]
+publicDir = "artifacts/j14-75/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22935"
+BASE_PATH = "/"
