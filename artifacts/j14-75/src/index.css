@@ -72,8 +72,8 @@ html {
 }
 
 body {
-  background: #000 !important;
-  color: #F8F9FA !important;
+  background: #000;
+  color: #F8F9FA;
   margin: 0;
   padding: 0;
 }

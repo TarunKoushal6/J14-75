@@ -56,79 +56,72 @@ const fadeUp = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.8, ease: [0.25, 0.1, 0.25, 1] },
+    transition: { duration: 0.8, ease: [0.25, 0.1, 0.25, 1] as const },
   },
 };
 
 const fadeScale = {
-  hidden: { opacity: 0, scale: 0.95 },
+  hidden: { opacity: 0, scale: 0.96 },
   visible: {
     opacity: 1,
     scale: 1,
-    transition: { duration: 0.9, ease: [0.25, 0.1, 0.25, 1] },
+    transition: { duration: 0.9, ease: [0.25, 0.1, 0.25, 1] as const },
   },
 };
 
 const stagger = {
-  visible: { transition: { staggerChildren: 0.15 } },
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.14 } },
 };
 
-function ThemeToggle({
-  dark,
-  onToggle,
-}: {
-  dark: boolean;
-  onToggle: () => void;
-}) {
+function ThemeToggle({ dark, onToggle }: { dark: boolean; onToggle: () => void }) {
   return (
-    <motion.button
+    <button
       onClick={onToggle}
-      whileTap={{ scale: 0.92 }}
       title={dark ? "Switch to light mode" : "Switch to dark mode"}
       style={{
         position: "fixed",
-        top: "1.25rem",
+        top: "1.1rem",
         right: "1.25rem",
-        zIndex: 1000,
-        width: 48,
-        height: 26,
+        zIndex: 10000,
+        width: 52,
+        height: 28,
         borderRadius: 999,
-        background: dark
-          ? "rgba(255,107,0,0.15)"
-          : "rgba(0,0,0,0.08)",
-        border: dark
-          ? "1px solid rgba(255,107,0,0.35)"
-          : "1px solid rgba(0,0,0,0.15)",
-        backdropFilter: "blur(12px)",
+        background: dark ? "rgba(255,107,0,0.18)" : "rgba(0,0,0,0.12)",
+        border: dark ? "1px solid rgba(255,107,0,0.4)" : "1px solid rgba(0,0,0,0.18)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
         cursor: "pointer",
-        padding: 3,
+        padding: "4px",
         display: "flex",
         alignItems: "center",
         justifyContent: dark ? "flex-start" : "flex-end",
+        transition: "background 0.3s ease, border-color 0.3s ease",
+        outline: "none",
       }}
     >
       <motion.div
         layout
-        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+        transition={{ type: "spring", stiffness: 520, damping: 38 }}
         style={{
-          width: 18,
-          height: 18,
+          width: 20,
+          height: 20,
           borderRadius: "50%",
           background: dark
             ? "linear-gradient(135deg, #FF6B00, #FFB300)"
-            : "linear-gradient(135deg, #1a1a2e, #4a4a6a)",
-          boxShadow: dark
-            ? "0 0 8px rgba(255,107,0,0.6)"
-            : "0 0 6px rgba(0,0,0,0.2)",
+            : "linear-gradient(135deg, #2d3561, #6c7fc4)",
+          boxShadow: dark ? "0 0 10px rgba(255,107,0,0.65)" : "0 0 6px rgba(0,0,0,0.25)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 9,
+          fontSize: 10,
+          color: "#fff",
+          flexShrink: 0,
         }}
       >
         {dark ? "☀" : "☽"}
       </motion.div>
-    </motion.button>
+    </button>
   );
 }
 
@@ -140,20 +133,32 @@ export default function Home() {
   const [visibleLines, setVisibleLines] = useState<string[]>([]);
   const lineIndexRef = useRef(0);
   const terminalBodyRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const terminalIsInView = useInView(terminalRef, { once: true, amount: 0.2 });
+  const terminalSectionRef = useRef<HTMLDivElement>(null);
+  const terminalIsInView = useInView(terminalSectionRef, { once: true, amount: 0.2 });
 
-  const heroReveal = useScrollReveal(0.3);
-  const act2Left = useScrollReveal(0.2);
-  const act2Right = useScrollReveal(0.2);
-  const act3Left = useScrollReveal(0.2);
-  const act3Right = useScrollReveal(0.2);
+  const act2Left = useScrollReveal(0.15);
+  const act2Right = useScrollReveal(0.15);
+  const act3Left = useScrollReveal(0.15);
+  const act3Right = useScrollReveal(0.15);
   const footerReveal = useScrollReveal(0.5);
 
+  /* ── Persist theme preference ── */
   useEffect(() => {
     const stored = localStorage.getItem("j1475-theme");
     if (stored === "light") setDark(false);
   }, []);
+
+  /* ── Push theme to body so the whole page surface changes ── */
+  useEffect(() => {
+    const bodyBg = dark ? "#000000" : "#f4efe8";
+    const bodyColor = dark ? "#F8F9FA" : "#1a1612";
+    document.body.style.setProperty("background", bodyBg, "important");
+    document.body.style.setProperty("color", bodyColor, "important");
+    return () => {
+      document.body.style.removeProperty("background");
+      document.body.style.removeProperty("color");
+    };
+  }, [dark]);
 
   const toggleTheme = () => {
     setDark((prev) => {
@@ -163,6 +168,7 @@ export default function Home() {
     });
   };
 
+  /* ── Preloader counter ── */
   useEffect(() => {
     const interval = setInterval(() => {
       setCount((prev) => {
@@ -178,6 +184,7 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  /* ── Terminal typewriter ── */
   useEffect(() => {
     if (!terminalIsInView) return;
     lineIndexRef.current = 0;
@@ -199,14 +206,16 @@ export default function Home() {
     }
   }, [visibleLines]);
 
-  const bg = dark ? "#000000" : "#f5f0ea";
+  /* ── Theme tokens ── */
+  const bg = dark ? "#000000" : "#f4efe8";
   const text = dark ? "#F8F9FA" : "#1a1612";
-  const textMuted = dark ? "rgba(209,213,219,0.75)" : "rgba(60,50,40,0.7)";
-  const cardBg = dark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.65)";
-  const cardBorder = dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.09)";
-  const dividerColor = dark ? "rgba(255,107,0,0.15)" : "rgba(255,107,0,0.25)";
-  const termBg = dark ? "#000" : "#0e0b08";
-  const termBorder = dark ? "rgba(255,107,0,0.2)" : "rgba(255,107,0,0.35)";
+  const textMuted = dark ? "rgba(209,213,219,0.72)" : "rgba(55,44,33,0.68)";
+  const cardBg = dark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.6)";
+  const cardBorder = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.09)";
+  const dividerColor = dark ? "rgba(255,107,0,0.14)" : "rgba(255,107,0,0.22)";
+  const termBg = "#080400";
+  const termBorder = dark ? "rgba(255,107,0,0.22)" : "rgba(255,107,0,0.38)";
+  const videoBorder = dark ? "rgba(255,107,0,0.14)" : "rgba(255,107,0,0.25)";
 
   return (
     <div
@@ -215,52 +224,55 @@ export default function Home() {
         background: bg,
         color: text,
         overflowX: "hidden",
-        transition: "background 0.4s ease, color 0.4s ease",
+        transition: "background 0.35s ease, color 0.35s ease",
         minHeight: "100vh",
       }}
     >
       <ThemeToggle dark={dark} onToggle={toggleTheme} />
 
-      {/* NAV LOGO */}
+      {/* ── NAV LOGO ── */}
       <motion.div
-        initial={{ opacity: 0, y: -12 }}
+        initial={{ opacity: 0, y: -10 }}
         animate={!preloaderVisible ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.6, delay: 0.2 }}
+        transition={{ duration: 0.5, delay: 0.15 }}
         style={{
           position: "fixed",
           top: "1rem",
           left: "1.5rem",
-          zIndex: 999,
+          zIndex: 9999,
           display: "flex",
           alignItems: "center",
-          gap: "0.6rem",
+          gap: "0.55rem",
+          pointerEvents: "none",
         }}
       >
         <img
           src={logoSrc}
-          alt="J14-75 logo"
+          alt="J14-75"
           style={{
-            width: 34,
-            height: 34,
+            width: 32,
+            height: 32,
             objectFit: "contain",
-            filter: dark ? "drop-shadow(0 0 6px rgba(255,107,0,0.5))" : "none",
+            filter: dark ? "drop-shadow(0 0 6px rgba(255,107,0,0.55))" : "none",
+            transition: "filter 0.35s ease",
           }}
         />
         <span
           style={{
             fontFamily: "'Space Grotesk', sans-serif",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             fontWeight: 600,
-            letterSpacing: "0.12em",
-            color: dark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.5)",
+            letterSpacing: "0.14em",
+            color: dark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.45)",
             textTransform: "uppercase",
+            transition: "color 0.35s ease",
           }}
         >
           J14-75
         </span>
       </motion.div>
 
-      {/* PRELOADER */}
+      {/* ── PRELOADER ── */}
       <AnimatePresence>
         {preloaderVisible && (
           <motion.div
@@ -270,7 +282,7 @@ export default function Home() {
             style={{
               position: "fixed",
               inset: 0,
-              zIndex: 9999,
+              zIndex: 99999,
               background: "#000",
               display: "flex",
               flexDirection: "column",
@@ -290,15 +302,15 @@ export default function Home() {
                   border: "2px solid transparent",
                   borderTopColor: "#FF6B00",
                   borderRightColor: "#FFB300",
-                  boxShadow: "0 0 24px rgba(255, 107, 0, 0.5)",
+                  boxShadow: "0 0 26px rgba(255,107,0,0.5)",
                 }}
               />
               <div
                 style={{
                   position: "absolute",
-                  inset: 8,
+                  inset: 9,
                   borderRadius: "50%",
-                  border: "1px solid rgba(255, 107, 0, 0.15)",
+                  border: "1px solid rgba(255,107,0,0.13)",
                 }}
               />
               <div
@@ -326,9 +338,9 @@ export default function Home() {
             <span
               style={{
                 fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: "0.75rem",
-                letterSpacing: "0.3em",
-                color: "rgba(255,255,255,0.3)",
+                fontSize: "0.72rem",
+                letterSpacing: "0.32em",
+                color: "rgba(255,255,255,0.28)",
                 textTransform: "uppercase",
               }}
             >
@@ -338,7 +350,9 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* HERO */}
+      {/* ─────────────────────────────────────────
+          HERO — full-screen video, contain fit
+      ───────────────────────────────────────── */}
       <section
         style={{
           position: "relative",
@@ -347,8 +361,10 @@ export default function Home() {
           alignItems: "center",
           justifyContent: "center",
           overflow: "hidden",
+          background: "#000",
         }}
       >
+        {/* Video: contain so it shows at natural scale, no crop */}
         <video
           autoPlay
           loop
@@ -359,24 +375,24 @@ export default function Home() {
             inset: 0,
             width: "100%",
             height: "100%",
-            objectFit: "cover",
+            objectFit: "contain",
             zIndex: 0,
           }}
           src="/hero-planet.mp4"
         />
+        {/* Dark overlay — heavier so text is always legible */}
         <div
           style={{
             position: "absolute",
             inset: 0,
-            background: dark
-              ? "linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%)"
-              : "linear-gradient(to bottom, rgba(245,240,234,0.55) 0%, rgba(245,240,234,0.25) 50%, rgba(245,240,234,0.9) 100%)",
+            background:
+              "linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.35) 45%, rgba(0,0,0,0.88) 100%)",
             zIndex: 1,
-            transition: "background 0.4s ease",
           }}
         />
+
+        {/* Hero text */}
         <motion.div
-          ref={heroReveal.ref}
           initial="hidden"
           animate={!preloaderVisible ? "visible" : "hidden"}
           variants={stagger}
@@ -385,24 +401,25 @@ export default function Home() {
             zIndex: 2,
             textAlign: "center",
             padding: "0 1.5rem",
-            maxWidth: 720,
+            maxWidth: 740,
           }}
         >
-          <motion.div variants={fadeUp} style={{ marginBottom: "0.75rem" }}>
+          {/* Label — white, not orange */}
+          <motion.div variants={fadeUp} style={{ marginBottom: "0.8rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.68rem",
-                letterSpacing: "0.32em",
-                color: "#FF6B00",
+                fontSize: "0.66rem",
+                letterSpacing: "0.34em",
+                color: "rgba(255,255,255,0.75)",
                 textTransform: "uppercase",
-                opacity: 0.9,
               }}
             >
               ARC-TESTNET · AGENT ID 75 · KYC VERIFIED
             </span>
           </motion.div>
 
+          {/* Main headline */}
           <motion.h1
             variants={fadeUp}
             style={{
@@ -411,26 +428,23 @@ export default function Home() {
               fontWeight: 700,
               lineHeight: 1,
               letterSpacing: "-0.02em",
-              background: dark
-                ? "linear-gradient(135deg, #F8F9FA 30%, #D1D5DB 100%)"
-                : "linear-gradient(135deg, #1a1612 30%, #4a3828 100%)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
+              color: "#F8F9FA",
               marginBottom: "1.25rem",
+              margin: "0 0 1.25rem 0",
             }}
           >
             J14-75
           </motion.h1>
 
+          {/* Subtitle — white */}
           <motion.p
             variants={fadeUp}
             style={{
               fontFamily: "'Inter', sans-serif",
-              fontSize: "clamp(0.9rem, 2vw, 1.1rem)",
+              fontSize: "clamp(0.88rem, 2vw, 1.05rem)",
               fontWeight: 300,
-              letterSpacing: "0.06em",
-              color: dark ? "rgba(248,249,250,0.7)" : "rgba(26,22,18,0.65)",
+              letterSpacing: "0.07em",
+              color: "rgba(255,255,255,0.65)",
               textTransform: "uppercase",
               marginBottom: "3rem",
             }}
@@ -438,24 +452,26 @@ export default function Home() {
             Autonomous On-Chain Intelligence. Secured by Circle.
           </motion.p>
 
+          {/* CTA button */}
           <motion.div variants={fadeUp}>
             <button
               disabled
               style={{
                 cursor: "not-allowed",
                 padding: "1rem 2.5rem",
-                border: "1px solid rgba(255, 179, 0, 0.45)",
+                border: "1px solid rgba(255,179,0,0.45)",
                 borderRadius: "2px",
-                background: "rgba(255, 107, 0, 0.06)",
+                background: "rgba(255,107,0,0.06)",
                 backdropFilter: "blur(14px)",
+                WebkitBackdropFilter: "blur(14px)",
                 color: "#FFB300",
                 fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: "0.7rem",
+                fontSize: "0.68rem",
                 fontWeight: 600,
-                letterSpacing: "0.25em",
+                letterSpacing: "0.26em",
                 textTransform: "uppercase",
                 boxShadow:
-                  "0 0 22px rgba(255, 179, 0, 0.12), inset 0 0 20px rgba(255, 107, 0, 0.04)",
+                  "0 0 24px rgba(255,179,0,0.1), inset 0 0 20px rgba(255,107,0,0.04)",
               }}
             >
               Command Center — Coming Soon
@@ -463,6 +479,7 @@ export default function Home() {
           </motion.div>
         </motion.div>
 
+        {/* Scroll indicator */}
         <div
           style={{
             position: "absolute",
@@ -474,39 +491,44 @@ export default function Home() {
         >
           <motion.div
             animate={{ y: [0, 10, 0] }}
-            transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+            transition={{ repeat: Infinity, duration: 2.2, ease: "easeInOut" }}
             style={{
               width: 1,
-              height: 48,
-              background: "linear-gradient(to bottom, rgba(255,107,0,0.8), transparent)",
+              height: 50,
+              background: "linear-gradient(to bottom, rgba(255,107,0,0.7), transparent)",
             }}
           />
         </div>
       </section>
 
-      {/* ACT 2: TRUST & INFRASTRUCTURE */}
+      {/* ─────────────────────────────────────────
+          ACT 2 — Text LEFT (40%) · Galaxy video RIGHT (60%)
+          Wide video, tall format, no circular frame
+      ───────────────────────────────────────── */}
       <section
         style={{
-          padding: "clamp(5rem, 10vw, 10rem) clamp(1.5rem, 6vw, 6rem)",
+          padding: "clamp(5rem, 10vw, 9rem) clamp(1.5rem, 5vw, 5rem)",
           maxWidth: 1400,
           margin: "0 auto",
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))",
-          gap: "clamp(3rem, 6vw, 7rem)",
+          gridTemplateColumns: "2fr 3fr",
+          gap: "clamp(2.5rem, 5vw, 6rem)",
           alignItems: "center",
         }}
+        className="act-grid"
       >
+        {/* LEFT: copy */}
         <motion.div
           ref={act2Left.ref}
           initial="hidden"
           animate={act2Left.isInView ? "visible" : "hidden"}
           variants={stagger}
         >
-          <motion.div variants={fadeUp} style={{ marginBottom: "1rem" }}>
+          <motion.div variants={fadeUp} style={{ marginBottom: "0.9rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.63rem",
+                fontSize: "0.62rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -520,12 +542,12 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: "clamp(1.9rem, 4vw, 3rem)",
+              fontSize: "clamp(1.8rem, 3.5vw, 2.8rem)",
               fontWeight: 700,
-              lineHeight: 1.1,
+              lineHeight: 1.12,
               letterSpacing: "-0.02em",
               color: text,
-              marginBottom: "1.5rem",
+              marginBottom: "1.4rem",
             }}
           >
             Built on Circle.
@@ -546,12 +568,11 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Inter', sans-serif",
-              fontSize: "1rem",
+              fontSize: "0.95rem",
               fontWeight: 300,
-              lineHeight: 1.8,
+              lineHeight: 1.82,
               color: textMuted,
-              marginBottom: "2.5rem",
-              maxWidth: 480,
+              marginBottom: "2.25rem",
             }}
           >
             J14-75 leverages Circle's Developer-Controlled Wallets for seamless,
@@ -564,190 +585,68 @@ export default function Home() {
             variants={stagger}
             style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
           >
-            <motion.div
-              variants={fadeUp}
-              style={{
-                padding: "1.25rem 1.75rem",
-                border: `1px solid rgba(255, 179, 0, ${dark ? "0.22" : "0.35"})`,
-                borderRadius: "4px",
-                background: dark
-                  ? "rgba(255, 107, 0, 0.04)"
-                  : "rgba(255,255,255,0.7)",
-                backdropFilter: "blur(16px)",
-                boxShadow: "0 0 30px rgba(255, 179, 0, 0.06)",
-              }}
-            >
-              <div
+            {[
+              { value: "100/100", label: "On-Chain Score", accent: "#FFB300" },
+              { value: "KYC", label: "Verified", accent: "#FF6B00" },
+            ].map((stat) => (
+              <motion.div
+                key={stat.label}
+                variants={fadeUp}
                 style={{
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontSize: "1.6rem",
-                  fontWeight: 700,
-                  color: "#FFB300",
-                  marginBottom: "0.25rem",
+                  padding: "1.15rem 1.6rem",
+                  border: `1px solid ${stat.accent}38`,
+                  borderRadius: "4px",
+                  background: cardBg,
+                  backdropFilter: "blur(16px)",
+                  WebkitBackdropFilter: "blur(16px)",
+                  transition: "background 0.35s ease",
                 }}
               >
-                100/100
-              </div>
-              <div
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.58rem",
-                  letterSpacing: "0.2em",
-                  color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
-                  textTransform: "uppercase",
-                }}
-              >
-                On-Chain Score
-              </div>
-            </motion.div>
-
-            <motion.div
-              variants={fadeUp}
-              style={{
-                padding: "1.25rem 1.75rem",
-                border: `1px solid rgba(255, 107, 0, ${dark ? "0.22" : "0.35"})`,
-                borderRadius: "4px",
-                background: dark
-                  ? "rgba(255, 107, 0, 0.04)"
-                  : "rgba(255,255,255,0.7)",
-                backdropFilter: "blur(16px)",
-                boxShadow: "0 0 30px rgba(255, 107, 0, 0.06)",
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontSize: "1.6rem",
-                  fontWeight: 700,
-                  color: "#FF6B00",
-                  marginBottom: "0.25rem",
-                }}
-              >
-                KYC
-              </div>
-              <div
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.58rem",
-                  letterSpacing: "0.2em",
-                  color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
-                  textTransform: "uppercase",
-                }}
-              >
-                Verified
-              </div>
-            </motion.div>
+                <div
+                  style={{
+                    fontFamily: "'Space Grotesk', sans-serif",
+                    fontSize: "1.55rem",
+                    fontWeight: 700,
+                    color: stat.accent,
+                    marginBottom: "0.2rem",
+                  }}
+                >
+                  {stat.value}
+                </div>
+                <div
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "0.57rem",
+                    letterSpacing: "0.2em",
+                    color: dark ? "rgba(255,255,255,0.38)" : "rgba(0,0,0,0.38)",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {stat.label}
+                </div>
+              </motion.div>
+            ))}
           </motion.div>
         </motion.div>
 
+        {/* RIGHT: Galaxy video — tall rectangle, blurred cinematic texture */}
         <motion.div
           ref={act2Right.ref}
           initial="hidden"
           animate={act2Right.isInView ? "visible" : "hidden"}
           variants={fadeScale}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
+          style={{ height: "100%" }}
         >
           <div
             style={{
               position: "relative",
-              width: "min(380px, 100%)",
-              aspectRatio: "1",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: -16,
-                borderRadius: "50%",
-                border: "1px solid rgba(255,179,0,0.18)",
-                boxShadow:
-                  "0 0 60px rgba(255,179,0,0.07), inset 0 0 60px rgba(255,107,0,0.03)",
-              }}
-            />
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 20, ease: "linear" }}
-              style={{
-                position: "absolute",
-                inset: -24,
-                borderRadius: "50%",
-                border: "1px dashed rgba(255,107,0,0.12)",
-              }}
-            />
-            <div
-              style={{
-                borderRadius: "50%",
-                overflow: "hidden",
-                width: "100%",
-                height: "100%",
-                border: "1px solid rgba(255,179,0,0.2)",
-                background: "rgba(255,107,0,0.03)",
-                backdropFilter: "blur(8px)",
-                boxShadow: "0 0 80px rgba(255,107,0,0.1)",
-              }}
-            >
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                }}
-                src="/earth.mp4"
-              />
-            </div>
-          </div>
-        </motion.div>
-      </section>
-
-      {/* DIVIDER */}
-      <div
-        style={{
-          maxWidth: 1400,
-          margin: "0 auto",
-          padding: "0 clamp(1.5rem, 6vw, 6rem)",
-        }}
-      >
-        <div
-          style={{
-            height: 1,
-            background: `linear-gradient(to right, transparent, ${dividerColor}, transparent)`,
-          }}
-        />
-      </div>
-
-      {/* ACT 3: DETERMINISTIC LOGIC */}
-      <section
-        style={{
-          padding: "clamp(5rem, 10vw, 10rem) clamp(1.5rem, 6vw, 6rem)",
-          maxWidth: 1400,
-          margin: "0 auto",
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))",
-          gap: "clamp(3rem, 6vw, 7rem)",
-          alignItems: "center",
-        }}
-      >
-        <motion.div
-          ref={act3Left.ref}
-          initial="hidden"
-          animate={act3Left.isInView ? "visible" : "hidden"}
-          variants={fadeScale}
-        >
-          <div
-            style={{
-              position: "relative",
-              borderRadius: "4px",
+              borderRadius: "6px",
               overflow: "hidden",
-              aspectRatio: "4/3",
-              border: `1px solid rgba(255,107,0,${dark ? "0.12" : "0.2"})`,
+              aspectRatio: "3/4",
+              border: `1px solid ${videoBorder}`,
+              boxShadow: dark
+                ? "0 0 60px rgba(255,107,0,0.06)"
+                : "0 0 40px rgba(255,107,0,0.08)",
             }}
           >
             <video
@@ -759,8 +658,8 @@ export default function Home() {
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                filter: "blur(8px) brightness(0.4)",
-                transform: "scale(1.08)",
+                filter: "blur(5px) brightness(0.5)",
+                transform: "scale(1.06)",
               }}
               src="/galaxy-core.mp4"
             />
@@ -769,23 +668,124 @@ export default function Home() {
                 position: "absolute",
                 inset: 0,
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,107,0,0.05) 0%, rgba(0,0,0,0.55) 70%)",
+                  "radial-gradient(ellipse at 50% 40%, rgba(255,107,0,0.08) 0%, rgba(0,0,0,0.5) 75%)",
               }}
             />
+            {/* Label overlay on video */}
+            <div
+              style={{
+                position: "absolute",
+                bottom: "1.5rem",
+                left: "1.5rem",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "0.6rem",
+                letterSpacing: "0.22em",
+                color: "rgba(255,140,0,0.55)",
+                textTransform: "uppercase",
+              }}
+            >
+              Galaxy Core · Arc Testnet
+            </div>
+          </div>
+        </motion.div>
+      </section>
+
+      {/* Section divider */}
+      <div style={{ maxWidth: 1400, margin: "0 auto", padding: "0 clamp(1.5rem, 5vw, 5rem)" }}>
+        <div
+          style={{
+            height: 1,
+            background: `linear-gradient(to right, transparent, ${dividerColor}, transparent)`,
+          }}
+        />
+      </div>
+
+      {/* ─────────────────────────────────────────
+          ACT 3 — Earth video LEFT (55%) · Feature cards RIGHT (45%)
+          Plain rectangle frame, wider video
+      ───────────────────────────────────────── */}
+      <section
+        style={{
+          padding: "clamp(5rem, 10vw, 9rem) clamp(1.5rem, 5vw, 5rem)",
+          maxWidth: 1400,
+          margin: "0 auto",
+          display: "grid",
+          gridTemplateColumns: "11fr 9fr",
+          gap: "clamp(2.5rem, 5vw, 6rem)",
+          alignItems: "start",
+        }}
+        className="act-grid"
+      >
+        {/* LEFT: Earth video — plain wide rectangle */}
+        <motion.div
+          ref={act3Left.ref}
+          initial="hidden"
+          animate={act3Left.isInView ? "visible" : "hidden"}
+          variants={fadeScale}
+        >
+          <div
+            style={{
+              position: "relative",
+              borderRadius: "6px",
+              overflow: "hidden",
+              aspectRatio: "16/10",
+              border: `1px solid ${videoBorder}`,
+              boxShadow: dark
+                ? "0 0 60px rgba(255,107,0,0.06)"
+                : "0 0 40px rgba(255,107,0,0.1)",
+            }}
+          >
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+              }}
+              src="/earth.mp4"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background:
+                  "linear-gradient(to bottom, transparent 55%, rgba(0,0,0,0.45) 100%)",
+                pointerEvents: "none",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                bottom: "1.25rem",
+                left: "1.5rem",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "0.6rem",
+                letterSpacing: "0.22em",
+                color: "rgba(255,140,0,0.55)",
+                textTransform: "uppercase",
+              }}
+            >
+              Earth · Live Feed
+            </div>
           </div>
         </motion.div>
 
+        {/* RIGHT: Feature cards */}
         <motion.div
           ref={act3Right.ref}
           initial="hidden"
           animate={act3Right.isInView ? "visible" : "hidden"}
           variants={stagger}
+          style={{ paddingTop: "1rem" }}
         >
-          <motion.div variants={fadeUp} style={{ marginBottom: "1rem" }}>
+          <motion.div variants={fadeUp} style={{ marginBottom: "0.9rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.63rem",
+                fontSize: "0.62rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -799,12 +799,12 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: "clamp(1.9rem, 4vw, 3rem)",
+              fontSize: "clamp(1.8rem, 3.5vw, 2.8rem)",
               fontWeight: 700,
-              lineHeight: 1.1,
+              lineHeight: 1.12,
               letterSpacing: "-0.02em",
               color: text,
-              marginBottom: "2.5rem",
+              marginBottom: "2rem",
             }}
           >
             Code is the
@@ -823,30 +823,31 @@ export default function Home() {
 
           <motion.div
             variants={stagger}
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}
           >
             {FEATURE_CARDS.map((card) => (
               <motion.div
                 key={card.id}
                 variants={fadeUp}
                 style={{
-                  padding: "1.5rem 1.75rem",
+                  padding: "1.4rem 1.6rem",
                   border: `1px solid ${cardBorder}`,
                   borderRadius: "4px",
                   background: cardBg,
                   backdropFilter: "blur(12px)",
+                  WebkitBackdropFilter: "blur(12px)",
                   display: "flex",
-                  gap: "1.25rem",
+                  gap: "1.2rem",
                   alignItems: "flex-start",
-                  transition: "background 0.4s ease, border-color 0.4s ease",
+                  transition: "background 0.35s ease, border-color 0.35s ease",
                 }}
               >
                 <span
                   style={{
-                    fontSize: "1.3rem",
+                    fontSize: "1.25rem",
                     color: "#FF6B00",
                     flexShrink: 0,
-                    lineHeight: 1.35,
+                    lineHeight: 1.4,
                   }}
                 >
                   {card.icon}
@@ -855,10 +856,11 @@ export default function Home() {
                   <div
                     style={{
                       fontFamily: "'Space Grotesk', sans-serif",
-                      fontSize: "0.95rem",
+                      fontSize: "0.93rem",
                       fontWeight: 600,
                       color: text,
-                      marginBottom: "0.4rem",
+                      marginBottom: "0.35rem",
+                      transition: "color 0.35s ease",
                     }}
                   >
                     {card.title}
@@ -866,10 +868,11 @@ export default function Home() {
                   <div
                     style={{
                       fontFamily: "'Inter', sans-serif",
-                      fontSize: "0.875rem",
+                      fontSize: "0.855rem",
                       fontWeight: 300,
-                      lineHeight: 1.7,
+                      lineHeight: 1.72,
                       color: textMuted,
+                      transition: "color 0.35s ease",
                     }}
                   >
                     {card.description}
@@ -881,25 +884,27 @@ export default function Home() {
         </motion.div>
       </section>
 
-      {/* ACT 4: TERMINAL */}
+      {/* ─────────────────────────────────────────
+          ACT 4 — TERMINAL
+      ───────────────────────────────────────── */}
       <section
-        ref={terminalRef}
+        ref={terminalSectionRef}
         style={{
-          padding: "clamp(4rem, 8vw, 8rem) clamp(1.5rem, 6vw, 6rem)",
+          padding: "clamp(4rem, 8vw, 7rem) clamp(1.5rem, 5vw, 5rem)",
           maxWidth: 1000,
           margin: "0 auto",
         }}
       >
         <motion.div
-          initial={{ opacity: 0, y: 30 }}
+          initial={{ opacity: 0, y: 28 }}
           animate={terminalIsInView ? { opacity: 1, y: 0 } : {}}
           transition={{ duration: 0.8 }}
         >
-          <div style={{ textAlign: "center", marginBottom: "3rem" }}>
+          <div style={{ textAlign: "center", marginBottom: "2.75rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.63rem",
+                fontSize: "0.62rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -910,11 +915,12 @@ export default function Home() {
             <h2
               style={{
                 fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: "clamp(1.75rem, 3.5vw, 2.5rem)",
+                fontSize: "clamp(1.7rem, 3.5vw, 2.4rem)",
                 fontWeight: 700,
                 color: text,
-                marginTop: "0.75rem",
+                marginTop: "0.7rem",
                 letterSpacing: "-0.02em",
+                transition: "color 0.35s ease",
               }}
             >
               On-Chain. Always.
@@ -927,75 +933,61 @@ export default function Home() {
               border: `1px solid ${termBorder}`,
               borderRadius: "6px",
               overflow: "hidden",
-              boxShadow: "0 0 60px rgba(255,107,0,0.06)",
+              boxShadow: "0 0 60px rgba(255,107,0,0.05)",
             }}
           >
+            {/* Terminal title bar */}
             <div
               style={{
-                padding: "0.85rem 1.25rem",
-                borderBottom: `1px solid rgba(255,107,0,0.1)`,
+                padding: "0.8rem 1.2rem",
+                borderBottom: "1px solid rgba(255,107,0,0.1)",
                 display: "flex",
                 alignItems: "center",
-                gap: "0.5rem",
+                gap: "0.45rem",
                 background: "rgba(255,107,0,0.03)",
               }}
             >
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: "rgba(255,107,0,0.5)",
-                }}
-              />
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: "rgba(255,179,0,0.35)",
-                }}
-              />
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: "rgba(255,255,255,0.1)",
-                }}
-              />
+              {["rgba(255,107,0,0.5)", "rgba(255,179,0,0.35)", "rgba(255,255,255,0.1)"].map(
+                (c, i) => (
+                  <div
+                    key={i}
+                    style={{ width: 10, height: 10, borderRadius: "50%", background: c }}
+                  />
+                )
+              )}
               <span
                 style={{
                   fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.6rem",
-                  color: "rgba(255,140,0,0.4)",
+                  fontSize: "0.58rem",
+                  color: "rgba(255,140,0,0.38)",
                   letterSpacing: "0.1em",
-                  marginLeft: "0.5rem",
+                  marginLeft: "0.4rem",
                 }}
               >
                 j14-75 :: arc-testnet :: live
               </span>
             </div>
 
+            {/* Terminal body */}
             <div
               ref={terminalBodyRef}
               style={{
-                padding: "1.25rem 1.5rem",
+                padding: "1.2rem 1.5rem",
                 maxHeight: 340,
                 overflowY: "auto",
                 scrollbarWidth: "thin",
-                scrollbarColor: "rgba(255,107,0,0.2) transparent",
+                scrollbarColor: "rgba(255,107,0,0.18) transparent",
               }}
             >
               {visibleLines.map((line, i) => (
                 <motion.div
                   key={i}
-                  initial={{ opacity: 0, x: -6 }}
+                  initial={{ opacity: 0, x: -5 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.25 }}
+                  transition={{ duration: 0.22 }}
                   style={{
                     fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "0.76rem",
+                    fontSize: "0.75rem",
                     lineHeight: 1.95,
                     color: "#FF8C00",
                     letterSpacing: "0.02em",
@@ -1006,7 +998,6 @@ export default function Home() {
                   {line}
                 </motion.div>
               ))}
-
               {terminalIsInView && (
                 <motion.span
                   animate={{ opacity: [1, 0, 1] }}
@@ -1014,9 +1005,9 @@ export default function Home() {
                   style={{
                     display: "inline-block",
                     fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "0.76rem",
+                    fontSize: "0.75rem",
                     color: "#FF8C00",
-                    marginLeft: "2px",
+                    marginLeft: 2,
                   }}
                 >
                   _
@@ -1027,11 +1018,12 @@ export default function Home() {
         </motion.div>
       </section>
 
-      {/* FOOTER */}
+      {/* ── FOOTER ── */}
       <footer
         style={{
-          padding: "3rem clamp(1.5rem, 6vw, 6rem)",
+          padding: "3rem clamp(1.5rem, 5vw, 5rem)",
           borderTop: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.07)"}`,
+          transition: "border-color 0.35s ease",
         }}
       >
         <motion.div
@@ -1046,8 +1038,9 @@ export default function Home() {
               fontFamily: "'Inter', sans-serif",
               fontSize: "0.85rem",
               fontWeight: 300,
-              color: dark ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.35)",
-              marginBottom: "0.75rem",
+              color: dark ? "rgba(255,255,255,0.26)" : "rgba(0,0,0,0.32)",
+              marginBottom: "0.7rem",
+              transition: "color 0.35s ease",
             }}
           >
             Created with ❤️ by Tarun
@@ -1055,9 +1048,9 @@ export default function Home() {
           <div
             style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "0.58rem",
-              letterSpacing: "0.25em",
-              color: "rgba(255,107,0,0.3)",
+              fontSize: "0.56rem",
+              letterSpacing: "0.26em",
+              color: "rgba(255,107,0,0.28)",
               textTransform: "uppercase",
             }}
           >
@@ -1065,6 +1058,15 @@ export default function Home() {
           </div>
         </motion.div>
       </footer>
+
+      {/* Responsive grid collapse */}
+      <style>{`
+        @media (max-width: 768px) {
+          .act-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
