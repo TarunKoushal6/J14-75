@@ -23,24 +23,24 @@ const TERMINAL_LINES = [
 
 const FEATURE_CARDS = [
   {
-    id: "escrow",
-    title: "Programmable Escrow",
+    id: "always-on",
+    title: "Always On",
     description:
-      "Trustless, condition-based USDC locking and release via smart contracts. No intermediaries.",
+      "Monitors the digital space around the clock — 24 hours a day, 7 days a week. It never sleeps, never pauses, and is always ready to act the moment it's needed.",
     icon: "◈",
   },
   {
-    id: "yield",
-    title: "Yield Optimization",
+    id: "smart-automation",
+    title: "Smart Automation",
     description:
-      "Autonomous capital allocation across verified on-chain protocols with deterministic risk parameters.",
+      "Executes tasks and makes decisions automatically, guided by trusted, real-time data. No manual input required — just reliable results, every time.",
     icon: "◎",
   },
   {
-    id: "execution",
-    title: "Deterministic Execution",
+    id: "secure-verified",
+    title: "Secure & Verified",
     description:
-      "Every action is cryptographically signed, on-chain verified, and immutably logged. Zero ambiguity.",
+      "Operates with its own secure digital wallet and a verified on-chain identity. Every action is traceable, tamper-proof, and built on complete trust.",
     icon: "◉",
   },
 ];
@@ -373,8 +373,9 @@ export default function Home() {
             inset: 0,
             width: "100%",
             height: "100%",
-            objectFit: "cover",   /* original: fills viewport */
+            objectFit: "cover",
             objectPosition: "center center",
+            transform: "scale(0.94)",
             zIndex: 0,
           }}
           src="/hero-planet.mp4"
@@ -432,22 +433,27 @@ export default function Home() {
               margin: "0 0 1.25rem 0",
             }}
           >
-            J14-75
+            Meet J14-75.
           </motion.h1>
 
           <motion.p
             variants={fadeUp}
             style={{
               fontFamily: "'Inter', sans-serif",
-              fontSize: "clamp(0.88rem, 2vw, 1.05rem)",
+              fontSize: "clamp(0.95rem, 1.8vw, 1.1rem)",
               fontWeight: 300,
-              letterSpacing: "0.07em",
-              color: "rgba(255,255,255,0.65)",
-              textTransform: "uppercase",
+              lineHeight: 1.8,
+              color: "rgba(255,255,255,0.68)",
               marginBottom: "3rem",
+              maxWidth: 580,
+              margin: "0 auto 3rem auto",
             }}
           >
-            Autonomous On-Chain Intelligence. Secured by Circle.
+            A fully autonomous AI assistant built on Circle's secure infrastructure.
+            Its name draws from J1407b — the "Super-Saturn" of deep space, celebrated
+            for its breathtaking ring system of extraordinary scale and complexity.
+            Just like its namesake, J14-75 is built to handle the complex effortlessly —
+            structured, intelligent, and always in motion.
           </motion.p>
 
           <motion.div variants={fadeUp}>
@@ -714,7 +720,7 @@ export default function Home() {
                 textTransform: "uppercase",
               }}
             >
-              02 — Deterministic Logic
+              02 — Core Capabilities
             </span>
           </motion.div>
 
@@ -731,7 +737,7 @@ export default function Home() {
               transition: "color 0.35s ease",
             }}
           >
-            Code is the{" "}
+            Built to work{" "}
             <span
               style={{
                 background: "linear-gradient(90deg, #FF6B00, #FFB300)",
@@ -740,7 +746,7 @@ export default function Home() {
                 backgroundClip: "text",
               }}
             >
-              only authority.
+              while you rest.
             </span>
           </motion.h2>
 
