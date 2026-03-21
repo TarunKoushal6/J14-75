@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
+import logoSrc from "/logo.png";
 
 const TERMINAL_LINES = [
   "> SYSTEM INIT :: J14-75 :: ARC-TESTNET",
@@ -52,24 +53,93 @@ function useScrollReveal(threshold = 0.15) {
 
 const fadeUp = {
   hidden: { opacity: 0, y: 40 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.8, ease: [0.25, 0.1, 0.25, 1] } },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.8, ease: [0.25, 0.1, 0.25, 1] },
+  },
 };
 
 const fadeScale = {
   hidden: { opacity: 0, scale: 0.95 },
-  visible: { opacity: 1, scale: 1, transition: { duration: 0.9, ease: [0.25, 0.1, 0.25, 1] } },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    transition: { duration: 0.9, ease: [0.25, 0.1, 0.25, 1] },
+  },
 };
 
 const stagger = {
   visible: { transition: { staggerChildren: 0.15 } },
 };
 
+function ThemeToggle({
+  dark,
+  onToggle,
+}: {
+  dark: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <motion.button
+      onClick={onToggle}
+      whileTap={{ scale: 0.92 }}
+      title={dark ? "Switch to light mode" : "Switch to dark mode"}
+      style={{
+        position: "fixed",
+        top: "1.25rem",
+        right: "1.25rem",
+        zIndex: 1000,
+        width: 48,
+        height: 26,
+        borderRadius: 999,
+        background: dark
+          ? "rgba(255,107,0,0.15)"
+          : "rgba(0,0,0,0.08)",
+        border: dark
+          ? "1px solid rgba(255,107,0,0.35)"
+          : "1px solid rgba(0,0,0,0.15)",
+        backdropFilter: "blur(12px)",
+        cursor: "pointer",
+        padding: 3,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: dark ? "flex-start" : "flex-end",
+      }}
+    >
+      <motion.div
+        layout
+        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          background: dark
+            ? "linear-gradient(135deg, #FF6B00, #FFB300)"
+            : "linear-gradient(135deg, #1a1a2e, #4a4a6a)",
+          boxShadow: dark
+            ? "0 0 8px rgba(255,107,0,0.6)"
+            : "0 0 6px rgba(0,0,0,0.2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 9,
+        }}
+      >
+        {dark ? "☀" : "☽"}
+      </motion.div>
+    </motion.button>
+  );
+}
+
 export default function Home() {
+  const [dark, setDark] = useState(true);
   const [count, setCount] = useState(0);
   const [preloaderVisible, setPreloaderVisible] = useState(true);
   const [preloaderExiting, setPreloaderExiting] = useState(false);
   const [visibleLines, setVisibleLines] = useState<string[]>([]);
   const lineIndexRef = useRef(0);
+  const terminalBodyRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const terminalIsInView = useInView(terminalRef, { once: true, amount: 0.2 });
 
@@ -79,6 +149,19 @@ export default function Home() {
   const act3Left = useScrollReveal(0.2);
   const act3Right = useScrollReveal(0.2);
   const footerReveal = useScrollReveal(0.5);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("j1475-theme");
+    if (stored === "light") setDark(false);
+  }, []);
+
+  const toggleTheme = () => {
+    setDark((prev) => {
+      const next = !prev;
+      localStorage.setItem("j1475-theme", next ? "dark" : "light");
+      return next;
+    });
+  };
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -101,9 +184,7 @@ export default function Home() {
     const interval = setInterval(() => {
       if (lineIndexRef.current < TERMINAL_LINES.length) {
         const line = TERMINAL_LINES[lineIndexRef.current];
-        if (line !== undefined) {
-          setVisibleLines((prev) => [...prev, line]);
-        }
+        if (line !== undefined) setVisibleLines((prev) => [...prev, line]);
         lineIndexRef.current++;
       } else {
         clearInterval(interval);
@@ -113,20 +194,73 @@ export default function Home() {
   }, [terminalIsInView]);
 
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    if (terminalBodyRef.current) {
+      terminalBodyRef.current.scrollTop = terminalBodyRef.current.scrollHeight;
     }
   }, [visibleLines]);
+
+  const bg = dark ? "#000000" : "#f5f0ea";
+  const text = dark ? "#F8F9FA" : "#1a1612";
+  const textMuted = dark ? "rgba(209,213,219,0.75)" : "rgba(60,50,40,0.7)";
+  const cardBg = dark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.65)";
+  const cardBorder = dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.09)";
+  const dividerColor = dark ? "rgba(255,107,0,0.15)" : "rgba(255,107,0,0.25)";
+  const termBg = dark ? "#000" : "#0e0b08";
+  const termBorder = dark ? "rgba(255,107,0,0.2)" : "rgba(255,107,0,0.35)";
 
   return (
     <div
       style={{
         fontFamily: "'Inter', sans-serif",
-        background: "#000",
-        color: "#F8F9FA",
+        background: bg,
+        color: text,
         overflowX: "hidden",
+        transition: "background 0.4s ease, color 0.4s ease",
+        minHeight: "100vh",
       }}
     >
+      <ThemeToggle dark={dark} onToggle={toggleTheme} />
+
+      {/* NAV LOGO */}
+      <motion.div
+        initial={{ opacity: 0, y: -12 }}
+        animate={!preloaderVisible ? { opacity: 1, y: 0 } : {}}
+        transition={{ duration: 0.6, delay: 0.2 }}
+        style={{
+          position: "fixed",
+          top: "1rem",
+          left: "1.5rem",
+          zIndex: 999,
+          display: "flex",
+          alignItems: "center",
+          gap: "0.6rem",
+        }}
+      >
+        <img
+          src={logoSrc}
+          alt="J14-75 logo"
+          style={{
+            width: 34,
+            height: 34,
+            objectFit: "contain",
+            filter: dark ? "drop-shadow(0 0 6px rgba(255,107,0,0.5))" : "none",
+          }}
+        />
+        <span
+          style={{
+            fontFamily: "'Space Grotesk', sans-serif",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            letterSpacing: "0.12em",
+            color: dark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.5)",
+            textTransform: "uppercase",
+          }}
+        >
+          J14-75
+        </span>
+      </motion.div>
+
+      {/* PRELOADER */}
       <AnimatePresence>
         {preloaderVisible && (
           <motion.div
@@ -234,36 +368,38 @@ export default function Home() {
           style={{
             position: "absolute",
             inset: 0,
-            background:
-              "linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.8) 100%)",
+            background: dark
+              ? "linear-gradient(to bottom, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.85) 100%)"
+              : "linear-gradient(to bottom, rgba(245,240,234,0.55) 0%, rgba(245,240,234,0.25) 50%, rgba(245,240,234,0.9) 100%)",
             zIndex: 1,
+            transition: "background 0.4s ease",
           }}
         />
         <motion.div
           ref={heroReveal.ref}
           initial="hidden"
-          animate={heroReveal.isInView || !preloaderVisible ? "visible" : "hidden"}
+          animate={!preloaderVisible ? "visible" : "hidden"}
           variants={stagger}
           style={{
             position: "relative",
             zIndex: 2,
             textAlign: "center",
             padding: "0 1.5rem",
-            maxWidth: 700,
+            maxWidth: 720,
           }}
         >
           <motion.div variants={fadeUp} style={{ marginBottom: "0.75rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.7rem",
-                letterSpacing: "0.35em",
+                fontSize: "0.68rem",
+                letterSpacing: "0.32em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
                 opacity: 0.9,
               }}
             >
-              ARC-TESTNET :: AGENT ID 75 :: KYC VERIFIED
+              ARC-TESTNET · AGENT ID 75 · KYC VERIFIED
             </span>
           </motion.div>
 
@@ -275,7 +411,9 @@ export default function Home() {
               fontWeight: 700,
               lineHeight: 1,
               letterSpacing: "-0.02em",
-              background: "linear-gradient(135deg, #F8F9FA 30%, #D1D5DB 100%)",
+              background: dark
+                ? "linear-gradient(135deg, #F8F9FA 30%, #D1D5DB 100%)"
+                : "linear-gradient(135deg, #1a1612 30%, #4a3828 100%)",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
               backgroundClip: "text",
@@ -289,10 +427,10 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Inter', sans-serif",
-              fontSize: "clamp(0.95rem, 2vw, 1.15rem)",
+              fontSize: "clamp(0.9rem, 2vw, 1.1rem)",
               fontWeight: 300,
               letterSpacing: "0.06em",
-              color: "rgba(248,249,250,0.75)",
+              color: dark ? "rgba(248,249,250,0.7)" : "rgba(26,22,18,0.65)",
               textTransform: "uppercase",
               marginBottom: "3rem",
             }}
@@ -306,19 +444,18 @@ export default function Home() {
               style={{
                 cursor: "not-allowed",
                 padding: "1rem 2.5rem",
-                border: "1px solid rgba(255, 179, 0, 0.5)",
+                border: "1px solid rgba(255, 179, 0, 0.45)",
                 borderRadius: "2px",
-                background: "rgba(255, 107, 0, 0.05)",
-                backdropFilter: "blur(12px)",
+                background: "rgba(255, 107, 0, 0.06)",
+                backdropFilter: "blur(14px)",
                 color: "#FFB300",
                 fontFamily: "'Space Grotesk', sans-serif",
-                fontSize: "0.72rem",
+                fontSize: "0.7rem",
                 fontWeight: 600,
                 letterSpacing: "0.25em",
                 textTransform: "uppercase",
                 boxShadow:
-                  "0 0 20px rgba(255, 179, 0, 0.15), inset 0 0 20px rgba(255, 107, 0, 0.04)",
-                transition: "all 0.3s ease",
+                  "0 0 22px rgba(255, 179, 0, 0.12), inset 0 0 20px rgba(255, 107, 0, 0.04)",
               }}
             >
               Command Center — Coming Soon
@@ -333,10 +470,6 @@ export default function Home() {
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 2,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: "0.5rem",
           }}
         >
           <motion.div
@@ -345,8 +478,7 @@ export default function Home() {
             style={{
               width: 1,
               height: 48,
-              background:
-                "linear-gradient(to bottom, rgba(255,107,0,0.8), transparent)",
+              background: "linear-gradient(to bottom, rgba(255,107,0,0.8), transparent)",
             }}
           />
         </div>
@@ -359,7 +491,7 @@ export default function Home() {
           maxWidth: 1400,
           margin: "0 auto",
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 480px), 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))",
           gap: "clamp(3rem, 6vw, 7rem)",
           alignItems: "center",
         }}
@@ -369,13 +501,12 @@ export default function Home() {
           initial="hidden"
           animate={act2Left.isInView ? "visible" : "hidden"}
           variants={stagger}
-          style={{ order: 0 }}
         >
           <motion.div variants={fadeUp} style={{ marginBottom: "1rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.65rem",
+                fontSize: "0.63rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -389,11 +520,11 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: "clamp(2rem, 4vw, 3rem)",
+              fontSize: "clamp(1.9rem, 4vw, 3rem)",
               fontWeight: 700,
               lineHeight: 1.1,
               letterSpacing: "-0.02em",
-              color: "#F8F9FA",
+              color: text,
               marginBottom: "1.5rem",
             }}
           >
@@ -418,7 +549,7 @@ export default function Home() {
               fontSize: "1rem",
               fontWeight: 300,
               lineHeight: 1.8,
-              color: "rgba(209,213,219,0.8)",
+              color: textMuted,
               marginBottom: "2.5rem",
               maxWidth: 480,
             }}
@@ -437,9 +568,11 @@ export default function Home() {
               variants={fadeUp}
               style={{
                 padding: "1.25rem 1.75rem",
-                border: "1px solid rgba(255, 179, 0, 0.25)",
+                border: `1px solid rgba(255, 179, 0, ${dark ? "0.22" : "0.35"})`,
                 borderRadius: "4px",
-                background: "rgba(255, 107, 0, 0.04)",
+                background: dark
+                  ? "rgba(255, 107, 0, 0.04)"
+                  : "rgba(255,255,255,0.7)",
                 backdropFilter: "blur(16px)",
                 boxShadow: "0 0 30px rgba(255, 179, 0, 0.06)",
               }}
@@ -458,9 +591,9 @@ export default function Home() {
               <div
                 style={{
                   fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.6rem",
+                  fontSize: "0.58rem",
                   letterSpacing: "0.2em",
-                  color: "rgba(255,255,255,0.45)",
+                  color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
                   textTransform: "uppercase",
                 }}
               >
@@ -472,9 +605,11 @@ export default function Home() {
               variants={fadeUp}
               style={{
                 padding: "1.25rem 1.75rem",
-                border: "1px solid rgba(255, 107, 0, 0.25)",
+                border: `1px solid rgba(255, 107, 0, ${dark ? "0.22" : "0.35"})`,
                 borderRadius: "4px",
-                background: "rgba(255, 107, 0, 0.04)",
+                background: dark
+                  ? "rgba(255, 107, 0, 0.04)"
+                  : "rgba(255,255,255,0.7)",
                 backdropFilter: "blur(16px)",
                 boxShadow: "0 0 30px rgba(255, 107, 0, 0.06)",
               }}
@@ -493,9 +628,9 @@ export default function Home() {
               <div
                 style={{
                   fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.6rem",
+                  fontSize: "0.58rem",
                   letterSpacing: "0.2em",
-                  color: "rgba(255,255,255,0.45)",
+                  color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
                   textTransform: "uppercase",
                 }}
               >
@@ -514,17 +649,23 @@ export default function Home() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            order: 1,
           }}
         >
-          <div style={{ position: "relative", width: "min(400px, 100%)", aspectRatio: "1" }}>
+          <div
+            style={{
+              position: "relative",
+              width: "min(380px, 100%)",
+              aspectRatio: "1",
+            }}
+          >
             <div
               style={{
                 position: "absolute",
                 inset: -16,
                 borderRadius: "50%",
-                border: "1px solid rgba(255,179,0,0.2)",
-                boxShadow: "0 0 60px rgba(255,179,0,0.08), inset 0 0 60px rgba(255,107,0,0.04)",
+                border: "1px solid rgba(255,179,0,0.18)",
+                boxShadow:
+                  "0 0 60px rgba(255,179,0,0.07), inset 0 0 60px rgba(255,107,0,0.03)",
               }}
             />
             <motion.div
@@ -534,7 +675,7 @@ export default function Home() {
                 position: "absolute",
                 inset: -24,
                 borderRadius: "50%",
-                border: "1px dashed rgba(255,107,0,0.15)",
+                border: "1px dashed rgba(255,107,0,0.12)",
               }}
             />
             <div
@@ -546,7 +687,7 @@ export default function Home() {
                 border: "1px solid rgba(255,179,0,0.2)",
                 background: "rgba(255,107,0,0.03)",
                 backdropFilter: "blur(8px)",
-                boxShadow: "0 0 80px rgba(255,107,0,0.12)",
+                boxShadow: "0 0 80px rgba(255,107,0,0.1)",
               }}
             >
               <video
@@ -554,7 +695,11 @@ export default function Home() {
                 loop
                 muted
                 playsInline
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
                 src="/earth.mp4"
               />
             </div>
@@ -573,8 +718,7 @@ export default function Home() {
         <div
           style={{
             height: 1,
-            background:
-              "linear-gradient(to right, transparent, rgba(255,107,0,0.2), transparent)",
+            background: `linear-gradient(to right, transparent, ${dividerColor}, transparent)`,
           }}
         />
       </div>
@@ -586,7 +730,7 @@ export default function Home() {
           maxWidth: 1400,
           margin: "0 auto",
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 480px), 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))",
           gap: "clamp(3rem, 6vw, 7rem)",
           alignItems: "center",
         }}
@@ -596,7 +740,6 @@ export default function Home() {
           initial="hidden"
           animate={act3Left.isInView ? "visible" : "hidden"}
           variants={fadeScale}
-          style={{ order: 0 }}
         >
           <div
             style={{
@@ -604,7 +747,7 @@ export default function Home() {
               borderRadius: "4px",
               overflow: "hidden",
               aspectRatio: "4/3",
-              border: "1px solid rgba(255,107,0,0.12)",
+              border: `1px solid rgba(255,107,0,${dark ? "0.12" : "0.2"})`,
             }}
           >
             <video
@@ -616,7 +759,7 @@ export default function Home() {
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                filter: "blur(8px) brightness(0.45)",
+                filter: "blur(8px) brightness(0.4)",
                 transform: "scale(1.08)",
               }}
               src="/galaxy-core.mp4"
@@ -626,7 +769,7 @@ export default function Home() {
                 position: "absolute",
                 inset: 0,
                 background:
-                  "radial-gradient(ellipse at center, rgba(255,107,0,0.06) 0%, rgba(0,0,0,0.6) 70%)",
+                  "radial-gradient(ellipse at center, rgba(255,107,0,0.05) 0%, rgba(0,0,0,0.55) 70%)",
               }}
             />
           </div>
@@ -637,13 +780,12 @@ export default function Home() {
           initial="hidden"
           animate={act3Right.isInView ? "visible" : "hidden"}
           variants={stagger}
-          style={{ order: 1 }}
         >
           <motion.div variants={fadeUp} style={{ marginBottom: "1rem" }}>
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.65rem",
+                fontSize: "0.63rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -657,11 +799,11 @@ export default function Home() {
             variants={fadeUp}
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: "clamp(2rem, 4vw, 3rem)",
+              fontSize: "clamp(1.9rem, 4vw, 3rem)",
               fontWeight: 700,
               lineHeight: 1.1,
               letterSpacing: "-0.02em",
-              color: "#F8F9FA",
+              color: text,
               marginBottom: "2.5rem",
             }}
           >
@@ -689,22 +831,22 @@ export default function Home() {
                 variants={fadeUp}
                 style={{
                   padding: "1.5rem 1.75rem",
-                  border: "1px solid rgba(255,255,255,0.07)",
+                  border: `1px solid ${cardBorder}`,
                   borderRadius: "4px",
-                  background: "rgba(255,255,255,0.02)",
+                  background: cardBg,
                   backdropFilter: "blur(12px)",
                   display: "flex",
                   gap: "1.25rem",
                   alignItems: "flex-start",
-                  transition: "border-color 0.3s ease",
+                  transition: "background 0.4s ease, border-color 0.4s ease",
                 }}
               >
                 <span
                   style={{
-                    fontSize: "1.4rem",
+                    fontSize: "1.3rem",
                     color: "#FF6B00",
                     flexShrink: 0,
-                    lineHeight: 1.3,
+                    lineHeight: 1.35,
                   }}
                 >
                   {card.icon}
@@ -715,9 +857,8 @@ export default function Home() {
                       fontFamily: "'Space Grotesk', sans-serif",
                       fontSize: "0.95rem",
                       fontWeight: 600,
-                      color: "#F8F9FA",
+                      color: text,
                       marginBottom: "0.4rem",
-                      letterSpacing: "0.01em",
                     }}
                   >
                     {card.title}
@@ -728,7 +869,7 @@ export default function Home() {
                       fontSize: "0.875rem",
                       fontWeight: 300,
                       lineHeight: 1.7,
-                      color: "rgba(209,213,219,0.65)",
+                      color: textMuted,
                     }}
                   >
                     {card.description}
@@ -742,6 +883,7 @@ export default function Home() {
 
       {/* ACT 4: TERMINAL */}
       <section
+        ref={terminalRef}
         style={{
           padding: "clamp(4rem, 8vw, 8rem) clamp(1.5rem, 6vw, 6rem)",
           maxWidth: 1000,
@@ -757,7 +899,7 @@ export default function Home() {
             <span
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "0.65rem",
+                fontSize: "0.63rem",
                 letterSpacing: "0.3em",
                 color: "#FF6B00",
                 textTransform: "uppercase",
@@ -770,7 +912,7 @@ export default function Home() {
                 fontFamily: "'Space Grotesk', sans-serif",
                 fontSize: "clamp(1.75rem, 3.5vw, 2.5rem)",
                 fontWeight: 700,
-                color: "#F8F9FA",
+                color: text,
                 marginTop: "0.75rem",
                 letterSpacing: "-0.02em",
               }}
@@ -780,27 +922,30 @@ export default function Home() {
           </div>
 
           <div
-            ref={terminalRef}
             style={{
-              background: "#000",
-              border: "1px solid rgba(255,107,0,0.2)",
+              background: termBg,
+              border: `1px solid ${termBorder}`,
               borderRadius: "6px",
-              padding: "1.75rem",
-              maxHeight: 380,
-              overflowY: "auto",
-              boxShadow:
-                "0 0 60px rgba(255,107,0,0.06), inset 0 0 40px rgba(0,0,0,0.8)",
-              scrollbarWidth: "thin",
-              scrollbarColor: "rgba(255,107,0,0.2) transparent",
+              overflow: "hidden",
+              boxShadow: "0 0 60px rgba(255,107,0,0.06)",
             }}
           >
-            <div style={{ marginBottom: "1rem", display: "flex", gap: "0.4rem" }}>
+            <div
+              style={{
+                padding: "0.85rem 1.25rem",
+                borderBottom: `1px solid rgba(255,107,0,0.1)`,
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                background: "rgba(255,107,0,0.03)",
+              }}
+            >
               <div
                 style={{
                   width: 10,
                   height: 10,
                   borderRadius: "50%",
-                  background: "rgba(255,107,0,0.4)",
+                  background: "rgba(255,107,0,0.5)",
                 }}
               />
               <div
@@ -808,7 +953,7 @@ export default function Home() {
                   width: 10,
                   height: 10,
                   borderRadius: "50%",
-                  background: "rgba(255,179,0,0.3)",
+                  background: "rgba(255,179,0,0.35)",
                 }}
               />
               <div
@@ -819,43 +964,65 @@ export default function Home() {
                   background: "rgba(255,255,255,0.1)",
                 }}
               />
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "0.6rem",
+                  color: "rgba(255,140,0,0.4)",
+                  letterSpacing: "0.1em",
+                  marginLeft: "0.5rem",
+                }}
+              >
+                j14-75 :: arc-testnet :: live
+              </span>
             </div>
 
-            {visibleLines.map((line, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.3 }}
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.78rem",
-                  lineHeight: 1.9,
-                  color: "#FF8C00",
-                  letterSpacing: "0.02em",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                }}
-              >
-                {line}
-              </motion.div>
-            ))}
+            <div
+              ref={terminalBodyRef}
+              style={{
+                padding: "1.25rem 1.5rem",
+                maxHeight: 340,
+                overflowY: "auto",
+                scrollbarWidth: "thin",
+                scrollbarColor: "rgba(255,107,0,0.2) transparent",
+              }}
+            >
+              {visibleLines.map((line, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.25 }}
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "0.76rem",
+                    lineHeight: 1.95,
+                    color: "#FF8C00",
+                    letterSpacing: "0.02em",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {line}
+                </motion.div>
+              ))}
 
-            {terminalIsInView && (
-              <motion.span
-                animate={{ opacity: [1, 0, 1] }}
-                transition={{ repeat: Infinity, duration: 1 }}
-                style={{
-                  display: "inline-block",
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: "0.78rem",
-                  color: "#FF8C00",
-                  marginLeft: "2px",
-                }}
-              >
-                _
-              </motion.span>
-            )}
+              {terminalIsInView && (
+                <motion.span
+                  animate={{ opacity: [1, 0, 1] }}
+                  transition={{ repeat: Infinity, duration: 1 }}
+                  style={{
+                    display: "inline-block",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "0.76rem",
+                    color: "#FF8C00",
+                    marginLeft: "2px",
+                  }}
+                >
+                  _
+                </motion.span>
+              )}
+            </div>
           </div>
         </motion.div>
       </section>
@@ -864,7 +1031,7 @@ export default function Home() {
       <footer
         style={{
           padding: "3rem clamp(1.5rem, 6vw, 6rem)",
-          borderTop: "1px solid rgba(255,255,255,0.05)",
+          borderTop: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.07)"}`,
         }}
       >
         <motion.div
@@ -879,7 +1046,7 @@ export default function Home() {
               fontFamily: "'Inter', sans-serif",
               fontSize: "0.85rem",
               fontWeight: 300,
-              color: "rgba(255,255,255,0.3)",
+              color: dark ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.35)",
               marginBottom: "0.75rem",
             }}
           >
@@ -888,13 +1055,13 @@ export default function Home() {
           <div
             style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: "0.6rem",
+              fontSize: "0.58rem",
               letterSpacing: "0.25em",
               color: "rgba(255,107,0,0.3)",
               textTransform: "uppercase",
             }}
           >
-            J14-75 :: Agent ID 75 :: Arc Testnet :: ERC-8004
+            J14-75 · Agent ID 75 · Arc Testnet · ERC-8004
           </div>
         </motion.div>
       </footer>
