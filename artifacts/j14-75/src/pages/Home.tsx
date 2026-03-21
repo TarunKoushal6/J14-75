@@ -377,6 +377,8 @@ export default function Home() {
             height: "100%",
             objectFit: "cover",
             objectPosition: "center center",
+            transform: "scale(0.92)",
+            transformOrigin: "center center",
             zIndex: 0,
           }}
           src="/hero-planet.mp4"
