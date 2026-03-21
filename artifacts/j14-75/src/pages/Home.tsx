@@ -361,6 +361,8 @@ export default function Home() {
           alignItems: "center",
           justifyContent: "center",
           overflow: "hidden",
+          background: bg,
+          transition: "background 0.35s ease",
         }}
       >
         <video
@@ -373,9 +375,8 @@ export default function Home() {
             inset: 0,
             width: "100%",
             height: "100%",
-            objectFit: "cover",
+            objectFit: "contain",
             objectPosition: "center center",
-            transform: "scale(0.94)",
             zIndex: 0,
           }}
           src="/hero-planet.mp4"
