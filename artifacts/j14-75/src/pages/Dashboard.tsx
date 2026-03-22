@@ -10,6 +10,7 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";
+const ARC_CHAIN_ID = "0x4CEF52"; // 5042002
 const REPUTATION_REGISTRY = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
 const AGENT_ID_HEX = "000000000000000000000000000000000000000000000000000000000000004b"; // 75
 
@@ -21,11 +22,27 @@ const SCORE_SELECTORS: string[] = [
   "0x925469dc", // getAgentScore(uint256)
 ];
 
-const QUICK_ACTIONS = [
-  { label: "Check balance", icon: Wallet, prompt: "Check the balance of 0x8004A818BFB912233c491871b3d84c89A494BD9e on ARC-TESTNET" },
-  { label: "Bridge USDC", icon: ArrowRightLeft, prompt: "Simulate bridging 100 USDC from ETH-SEPOLIA to ARC-TESTNET" },
-  { label: "Audit contract", icon: Shield, prompt: "Audit the ERC-8004 IdentityRegistry at 0x8004A818BFB912233c491871b3d84c89A494BD9e on ARC-TESTNET" },
-];
+function getQuickActions(walletAddress?: string) {
+  return [
+    {
+      label: "Check balance",
+      icon: Wallet,
+      prompt: walletAddress
+        ? `Check the balance of my wallet ${walletAddress} on Arc Testnet`
+        : "What is my balance on Arc Testnet?",
+    },
+    {
+      label: "Bridge USDC",
+      icon: ArrowRightLeft,
+      prompt: "How do I bridge 100 USDC from ETH Sepolia to Arc Testnet via CCTP?",
+    },
+    {
+      label: "Audit contract",
+      icon: Shield,
+      prompt: "Audit the contract at 0x8004A818BFB912233c491871b3d84c89A494BD9e on Arc Testnet",
+    },
+  ];
+}
 
 const CAPABILITIES = [
   { icon: Wallet, label: "Wallet Mgmt", desc: "SCA wallets on Circle infra" },
@@ -118,26 +135,29 @@ function ScoreRing({ value, size = 56, color = "#FF6B00" }: { value: number; siz
   );
 }
 
-// ── Agent mock response ────────────────────────────────────────────────────
+// ── Welcome message & backend AI ───────────────────────────────────────────
 const WELCOME_MESSAGE: Message = {
   id: "welcome",
   role: "agent",
-  content: "Online. I'm J14-75 — ERC-8004 registered, KYC-verified on Arc Testnet.\n\nI can manage wallets, check on-chain balances, simulate USDC bridges via CCTP, and audit smart contracts. What do you need?",
+  content: "Online. I'm J14-75 — ERC-8004 registered, KYC-verified on Arc Testnet.\n\nI can check on-chain balances, explain CCTP bridges, and audit smart contracts. Connect your wallet for personalized queries.",
   timestamp: new Date(),
 };
 
-async function getAgentResponse(userMessage: string): Promise<string> {
-  await new Promise((r) => setTimeout(r, 900 + Math.random() * 700));
-  const lc = userMessage.toLowerCase();
-  if (lc.includes("balance"))
-    return "On ARC-TESTNET, address 0x8004...D9e holds 0.0142 ETH. USDC contract is deployed at 0x8005f18f4E014a87f5F37ba1D2d0A6b3692c0bf1. Query confirmed via viem public client on block #latest.";
-  if (lc.includes("bridge") || lc.includes("usdc"))
-    return "CCTP bridge simulation ready:\n\n• Route: ETH-SEPOLIA → ARC-TESTNET\n• Amount: 100 USDC\n• Est. fee: ~0.002 ETH\n• Est. time: ~2 minutes\n\nSteps: Approve → Burn (depositForBurn) → Attestation fetch → Mint (receiveMessage)\n\nConnect your wallet to execute on-chain.";
-  if (lc.includes("audit") || lc.includes("contract"))
-    return "Audit complete:\n\n✓ Risk Score: 95/100 — SAFE\n✓ ERC-8004 Compliant\n✓ Circle Infrastructure Verified\n✓ Source code verified on Arc Testnet\n\nNo critical findings. This is a known, audited ERC-8004 IdentityRegistry contract.";
-  if (lc.includes("wallet") || lc.includes("create"))
-    return "Wallet creation requires CIRCLE_API_KEY. Once configured, I'll create a new SCA wallet on ETH-SEPOLIA or ARC-TESTNET via Circle's Developer-Controlled Wallets API — ready in under 10 seconds.";
-  return "I'm J14-75, your on-chain AI agent. Try: 'Check my balance', 'Bridge 100 USDC to ARC-TESTNET', or 'Audit contract 0x8004...'. I have access to Circle wallets, CCTP bridges, and on-chain audit tools.";
+async function callBackendChat(
+  message: string,
+  walletAddress?: string,
+  history?: Array<{ role: "user" | "agent"; content: string }>
+): Promise<{ reply: string; toolUsed?: string }> {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, walletAddress, history }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as any).error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -360,11 +380,31 @@ export default function Dashboard() {
     setConnecting(true);
     try {
       const accounts = await (window as any).ethereum.request({ method: "eth_requestAccounts" });
-      const chainId = await (window as any).ethereum.request({ method: "eth_chainId" });
-      const chainName = chainId === "0xaa36a7" ? "ETH-SEPOLIA"
-        : chainId === "0x4cae32" ? "ARC-TESTNET"
-        : `Chain ${chainId}`;
-      setWallet({ connected: true, address: accounts[0], chain: chainName });
+
+      // Switch to Arc Testnet — add it if not present
+      try {
+        await (window as any).ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: ARC_CHAIN_ID }],
+        });
+      } catch (switchErr: any) {
+        if (switchErr.code === 4902 || switchErr.code === -32603) {
+          await (window as any).ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: ARC_CHAIN_ID,
+              chainName: "Arc Testnet",
+              nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+              rpcUrls: ["https://rpc.testnet.arc.network"],
+              blockExplorerUrls: ["https://explorer.testnet.arc.network"],
+            }],
+          });
+        } else {
+          throw switchErr;
+        }
+      }
+
+      setWallet({ connected: true, address: accounts[0], chain: "ARC-TESTNET" });
     } catch (err) {
       console.error("Wallet connect error:", err);
     } finally {
@@ -382,18 +422,31 @@ export default function Dashboard() {
     setIsTyping(true);
 
     try {
-      const response = await getAgentResponse(content);
-      const lc = content.toLowerCase();
-      const toolUsed = lc.includes("balance") ? "check_balance"
-        : lc.includes("bridge") ? "bridge_usdc"
-        : lc.includes("audit") ? "audit_contract"
-        : lc.includes("wallet") ? "manage_wallet"
-        : undefined;
-      setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "agent", content: response, timestamp: new Date(), toolUsed }]);
+      const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+      const { reply, toolUsed } = await callBackendChat(
+        content,
+        wallet.connected ? wallet.address : undefined,
+        history
+      );
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: "agent",
+        content: reply,
+        timestamp: new Date(),
+        toolUsed,
+      }]);
+    } catch (err) {
+      console.error("Chat error:", err);
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: "agent",
+        content: "I encountered an error reaching the AI service. Please try again.",
+        timestamp: new Date(),
+      }]);
     } finally {
       setIsTyping(false);
     }
-  }, [input, isTyping]);
+  }, [input, isTyping, messages, wallet]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -504,7 +557,7 @@ export default function Dashboard() {
           <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-2 shrink-0">
             {/* Quick action chips */}
             <div className="flex items-center gap-1.5 sm:gap-2 mb-2 flex-wrap">
-              {QUICK_ACTIONS.map((action) => (
+              {getQuickActions(wallet.connected ? wallet.address : undefined).map((action) => (
                 <motion.button key={action.label}
                   whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                   onClick={() => sendMessage(action.prompt)} disabled={isTyping}
