@@ -536,7 +536,7 @@ export default function Home() {
                 textTransform: "uppercase",
               }}
             >
-              01 — Trust & Infrastructure
+              01 Trust & Infrastructure
             </span>
           </motion.div>
 
@@ -727,7 +727,7 @@ export default function Home() {
                 textTransform: "uppercase",
               }}
             >
-              02 — Core Capabilities
+              02 Core Capabilities
             </span>
           </motion.div>
 
@@ -839,7 +839,7 @@ export default function Home() {
                 textTransform: "uppercase",
               }}
             >
-              03 — Transparency Log
+              03 Transparency Log
             </span>
             <h2
               style={{

@@ -147,8 +147,10 @@ function TypingIndicator() {
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
       className="flex items-center gap-2 mb-3"
     >
-      <div className="w-6 h-6 rounded-lg shrink-0 flex items-center justify-center text-black font-black text-[9px]"
-        style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>J</div>
+      <div className="w-6 h-6 rounded-lg shrink-0 overflow-hidden"
+        style={{ background: "#000", boxShadow: "0 0 8px rgba(255,107,0,0.3)" }}>
+        <img src="/logo.png" alt="J14-75" className="w-full h-full object-contain" />
+      </div>
       <div className="rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5"
         style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
         {[0, 1, 2].map((i) => (
@@ -169,8 +171,10 @@ function ChatMessage({ message }: { message: Message }) {
       className={`flex mb-3 ${isAgent ? "justify-start" : "justify-end"}`}
     >
       {isAgent && (
-        <div className="w-6 h-6 rounded-lg shrink-0 mr-2 mt-0.5 flex items-center justify-center text-black font-black text-[9px]"
-          style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>J</div>
+        <div className="w-6 h-6 rounded-lg shrink-0 mr-2 mt-0.5 overflow-hidden"
+          style={{ background: "#000", boxShadow: "0 0 8px rgba(255,107,0,0.3)" }}>
+          <img src="/logo.png" alt="J14-75" className="w-full h-full object-contain" />
+        </div>
       )}
       <div
         className={`max-w-[80%] sm:max-w-[72%] rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3 ${isAgent ? "rounded-tl-sm" : "rounded-tr-sm"}`}
@@ -213,11 +217,11 @@ function SidebarContent({
       <div className="flex flex-col items-center gap-2 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
         <div className="relative">
           <motion.div
-            className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center"
-            style={{ background: "linear-gradient(135deg, #FF6B00 0%, #FFB300 100%)" }}
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden flex items-center justify-center"
+            style={{ background: "#000", boxShadow: "0 0 18px rgba(255,107,0,0.35)" }}
             initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.4 }}
           >
-            <span className="text-black font-black text-base sm:text-lg tracking-tight">J14</span>
+            <img src="/logo.png" alt="J14-75" className="w-full h-full object-contain" />
           </motion.div>
           <span className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full"
             style={{ background: "#22c55e", border: "2px solid #000",
