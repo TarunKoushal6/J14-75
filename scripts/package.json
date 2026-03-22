@@ -6,12 +6,14 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "start": "tsx ./src/index.ts",
+    "agent": "tsx ./src/agent/agent-core.ts",
     "generate-secret": "tsx ./src/generate_secret.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^7.3.0",
     "dotenv": "^16.6.1",
+    "groq-sdk": "^0.9.1",
     "viem": "^2.47.4"
   },
   "devDependencies": {

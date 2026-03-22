@@ -92,6 +92,39 @@ Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used b
 
 Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
 
+### `artifacts/j14-75` (`@workspace/j14-75`)
+
+Cinematic sci-fi landing page for J14-75 AI Agent. React + Vite on port 22935, previewPath `/`.
+- Dark/light mode toggle, hero video with scale(0.92) zoom-out, Act 2 text-only trust section, Act 3 "Core Capabilities" cards
+- No galaxy video. Hero text always white over video. Light mode: warm cream `#f4efe8`.
+
+### `artifacts/command-center` (`@workspace/command-center`)
+
+J14-75 Command Center dashboard. React + Vite on port 23748, previewPath `/command-center/`.
+- Pure black `#000000` background, orange `#FF6B00` / amber `#FFB300` accents, glassmorphism
+- Top nav: logo + ERC-8004 badge + Connect Wallet button (shows chain after connect)
+- Left sidebar: J14-75 avatar, pulsing green dot, Status/KYC/Network metrics, Reputation+Validation score bars, wallet addresses
+- Center: AI chat interface with message history, quick action chips, textarea input
+- Right sidebar: capability cards (Wallet Mgmt, Balance Check, CCTP Bridge, Contract Audit, KYC Verified) + score ring
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+Key scripts:
+- `pnpm --filter @workspace/scripts run start` — ERC-8004 full registration flow on Arc Testnet
+- `pnpm --filter @workspace/scripts run agent` — J14-75 Multi-Tool AI Agent (requires GROQ_API_KEY)
+
+Agent framework in `src/agent/`:
+- `agent-core.ts` — Groq function-calling router (llama-3.3-70b-versatile), conversation history support
+- `tools/wallet-manager.ts` — Create/list Circle Developer-Controlled SCA wallets
+- `tools/check-balance.ts` — On-chain ETH + USDC balance via viem (ETH-SEPOLIA, ARC-TESTNET)
+- `tools/bridge-cctp.ts` — CCTP route simulation (burn → attestation → mint)
+- `tools/mock-audit.ts` — Smart contract security risk scoring
+
+Dependencies: `@circle-fin/developer-controlled-wallets ^7.3.0`, `groq-sdk ^0.9.1`, `viem ^2.47.4`, `dotenv`
+
+Secrets required:
+- `CIRCLE_API_KEY` — Circle Developer API key
+- `CIRCLE_ENTITY_SECRET` — Circle entity secret (backup in `scripts/recovery.dat`)
+- `GROQ_API_KEY` — Groq API key (needed only for `agent` script)
