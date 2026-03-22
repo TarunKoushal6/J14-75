@@ -1,6 +1,6 @@
-"use client";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
+import { useLocation } from "wouter";
 import logoSrc from "/logo.png";
 
 const TERMINAL_LINES = [
@@ -126,6 +126,7 @@ function ThemeToggle({ dark, onToggle }: { dark: boolean; onToggle: () => void }
 }
 
 export default function Home() {
+  const [, navigate] = useLocation();
   const [dark, setDark] = useState(true);
   const [count, setCount] = useState(0);
   const [preloaderVisible, setPreloaderVisible] = useState(true);
@@ -460,14 +461,16 @@ export default function Home() {
           </motion.p>
 
           <motion.div variants={fadeUp}>
-            <button
-              disabled
+            <motion.button
+              whileHover={{ scale: 1.04, boxShadow: "0 0 36px rgba(255,107,0,0.28), inset 0 0 20px rgba(255,107,0,0.08)" }}
+              whileTap={{ scale: 0.97 }}
+              onClick={() => navigate("/dashboard")}
               style={{
-                cursor: "not-allowed",
+                cursor: "pointer",
                 padding: "1rem 2.5rem",
-                border: "1px solid rgba(255,179,0,0.45)",
+                border: "1px solid rgba(255,179,0,0.55)",
                 borderRadius: "2px",
-                background: "rgba(255,107,0,0.06)",
+                background: "rgba(255,107,0,0.1)",
                 backdropFilter: "blur(14px)",
                 WebkitBackdropFilter: "blur(14px)",
                 color: "#FFB300",
@@ -476,11 +479,12 @@ export default function Home() {
                 fontWeight: 600,
                 letterSpacing: "0.26em",
                 textTransform: "uppercase",
-                boxShadow: "0 0 24px rgba(255,179,0,0.1), inset 0 0 20px rgba(255,107,0,0.04)",
+                boxShadow: "0 0 24px rgba(255,179,0,0.12), inset 0 0 20px rgba(255,107,0,0.04)",
+                transition: "border-color 0.25s ease, background 0.25s ease",
               }}
             >
-              Command Center — Coming Soon
-            </button>
+              Launch J14-75
+            </motion.button>
           </motion.div>
         </motion.div>
 
