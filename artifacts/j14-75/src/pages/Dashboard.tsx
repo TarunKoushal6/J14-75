@@ -798,10 +798,19 @@ export default function Dashboard() {
       setMessages((prev) => [...prev, agentMsg]);
     } catch (err) {
       console.error("Chat error:", err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const displayMessage = errorMessage.includes("rate_limit")
+        ? "⚠️ API rate limit reached. Please wait a moment and try again."
+        : errorMessage.includes("ERR_MODULE")
+        ? "⚠️ Backend configuration error. Check if all dependencies are installed."
+        : errorMessage.includes("429")
+        ? "⚠️ Service temporarily unavailable. Please retry."
+        : `⚠️ ${errorMessage || "Connection error. Check network and retry."}`;
+      
       setMessages((prev) => [...prev, {
         id: (Date.now() + 1).toString(),
         role: "agent",
-        content: "⚠️ Arc Testnet connection lost. Check RPC or retry.",
+        content: displayMessage,
         timestamp: new Date(),
       }]);
     } finally {
