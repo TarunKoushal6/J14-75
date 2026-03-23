@@ -3,6 +3,8 @@ import { motion, AnimatePresence, useInView } from "framer-motion";
 import { useLocation } from "wouter";
 import logoSrc from "/logo.png";
 
+const BASE_URL = import.meta.env.BASE_URL;
+
 const TERMINAL_LINES = [
   "> SYSTEM INIT :: J14-75 :: ARC-TESTNET",
   "> CONTRACT :: 0x8004A818BFB912233c491871b3d84c89A494BD9e",
@@ -382,7 +384,7 @@ export default function Home() {
             transformOrigin: "center center",
             zIndex: 0,
           }}
-          src="/hero-planet.mp4"
+          src={`${BASE_URL}hero-planet.mp4`}
         />
 
         {/* Overlay — adapts to theme */}
@@ -681,7 +683,7 @@ export default function Home() {
               muted
               playsInline
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              src="/earth.mp4"
+              src={`${BASE_URL}earth.mp4`}
             />
             {/* subtle bottom fade — always dark so label is readable */}
             <div
