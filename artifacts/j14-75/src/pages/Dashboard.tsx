@@ -58,6 +58,8 @@ interface Message {
   content: string;
   timestamp: Date;
   toolUsed?: string;
+  txHash?: string;
+  isStatus?: boolean;
 }
 
 interface WalletState {
@@ -139,15 +141,30 @@ function ScoreRing({ value, size = 56, color = "#FF6B00" }: { value: number; siz
 const WELCOME_MESSAGE: Message = {
   id: "welcome",
   role: "agent",
-  content: "Online. I'm J14-75 — ERC-8004 registered, KYC-verified on Arc Testnet.\n\nI can check on-chain balances, explain CCTP bridges, and audit smart contracts. Connect your wallet for personalized queries.",
+  content: "⚡ J14-75 online. ERC-8004 registered. KYC-verified on Arc Testnet.\n\nI execute on-chain — not simulate. Connect your wallet and tell me what to do.",
   timestamp: new Date(),
 };
+
+function getStatusText(content: string): string {
+  const lc = content.toLowerCase();
+  if (lc.includes("transfer") || lc.includes("send") || lc.includes("pay"))
+    return "⚡ Broadcasting transaction to Arc Testnet...";
+  if (lc.includes("bridge") || lc.includes("cctp"))
+    return "⚡ Mapping CCTP bridge route...";
+  if (lc.includes("balance") || lc.includes("fund") || lc.includes("how much"))
+    return "🔍 Scanning Arc Testnet block #latest...";
+  if (lc.includes("audit") || lc.includes("contract") || lc.includes("safe"))
+    return "🛡️ Running on-chain contract analysis...";
+  if (lc.includes("wallet") || lc.includes("create"))
+    return "🪐 Provisioning Circle SCA wallet on Arc Testnet...";
+  return "🪐 J14-75 processing...";
+}
 
 async function callBackendChat(
   message: string,
   walletAddress?: string,
   history?: Array<{ role: "user" | "agent"; content: string }>
-): Promise<{ reply: string; toolUsed?: string }> {
+): Promise<{ reply: string; toolUsed?: string; txHash?: string }> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -161,23 +178,28 @@ async function callBackendChat(
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
-function TypingIndicator() {
+function TypingIndicator({ statusText }: { statusText?: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-      className="flex items-center gap-2 mb-3"
+      className="flex items-start gap-2 mb-3"
     >
-      <div className="w-6 h-6 rounded-lg shrink-0 overflow-hidden"
+      <div className="w-6 h-6 rounded-lg shrink-0 overflow-hidden mt-0.5"
         style={{ background: "#000", boxShadow: "0 0 8px rgba(255,107,0,0.3)" }}>
         <img src="/logo.png" alt="J14-75" className="w-full h-full object-contain" />
       </div>
-      <div className="rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5"
+      <div className="rounded-2xl rounded-tl-sm px-4 py-3 flex flex-col gap-1.5"
         style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-        {[0, 1, 2].map((i) => (
-          <motion.span key={i} className="w-1.5 h-1.5 rounded-full" style={{ background: "#FF6B00" }}
-            animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.1, 0.8] }}
-            transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }} />
-        ))}
+        {statusText && (
+          <span className="text-xs font-medium" style={{ color: "#FF6B00" }}>{statusText}</span>
+        )}
+        <div className="flex items-center gap-1.5">
+          {[0, 1, 2].map((i) => (
+            <motion.span key={i} className="w-1.5 h-1.5 rounded-full" style={{ background: "#FF6B00" }}
+              animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.1, 0.8] }}
+              transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }} />
+          ))}
+        </div>
       </div>
     </motion.div>
   );
@@ -207,6 +229,21 @@ function ChatMessage({ message }: { message: Message }) {
           style={{ color: isAgent ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.9)" }}>
           {message.content}
         </p>
+        {message.txHash && (
+          <a
+            href={`https://explorer.testnet.arc.network/tx/${message.txHash}`}
+            target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg w-fit group"
+            style={{ background: "rgba(255,107,0,0.12)", border: "1px solid rgba(255,107,0,0.25)" }}
+          >
+            <Zap size={10} style={{ color: "#FF6B00" }} />
+            <span className="text-[10px] font-mono font-semibold" style={{ color: "#FF6B00" }}>
+              {message.txHash.slice(0, 10)}...{message.txHash.slice(-8)}
+            </span>
+            <ExternalLink size={10} className="opacity-60 group-hover:opacity-100 transition-opacity" style={{ color: "#FF6B00" }} />
+            <span className="text-[10px]" style={{ color: "rgba(255,107,0,0.7)" }}>Arc Explorer</span>
+          </a>
+        )}
         <div className="flex items-center justify-between mt-1.5 gap-2">
           <span className="text-[10px] shrink-0" style={{ color: "rgba(255,255,255,0.25)" }}>
             {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -351,6 +388,7 @@ export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [typingStatus, setTypingStatus] = useState<string | undefined>(undefined);
   const [wallet, setWallet] = useState<WalletState>({ connected: false, address: "", chain: "" });
   const [connecting, setConnecting] = useState(false);
   const [reputationScore, setReputationScore] = useState(95);
@@ -420,10 +458,14 @@ export default function Dashboard() {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsTyping(true);
+    setTypingStatus(getStatusText(content));
 
     try {
-      const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-      const { reply, toolUsed } = await callBackendChat(
+      const history = messages
+        .filter((m) => !m.isStatus)
+        .slice(-12)
+        .map((m) => ({ role: m.role, content: m.content }));
+      const { reply, toolUsed, txHash } = await callBackendChat(
         content,
         wallet.connected ? wallet.address : undefined,
         history
@@ -434,17 +476,19 @@ export default function Dashboard() {
         content: reply,
         timestamp: new Date(),
         toolUsed,
+        txHash,
       }]);
     } catch (err) {
       console.error("Chat error:", err);
       setMessages((prev) => [...prev, {
         id: (Date.now() + 1).toString(),
         role: "agent",
-        content: "I encountered an error reaching the AI service. Please try again.",
+        content: "⚠️ Arc Testnet connection lost. Check RPC or retry.",
         timestamp: new Date(),
       }]);
     } finally {
       setIsTyping(false);
+      setTypingStatus(undefined);
     }
   }, [input, isTyping, messages, wallet]);
 
@@ -548,7 +592,7 @@ export default function Dashboard() {
           <div className="flex-1 overflow-y-auto px-3 sm:px-5 pt-4" style={{ paddingBottom: 8 }}>
             <AnimatePresence mode="popLayout">
               {messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)}
-              {isTyping && <TypingIndicator key="typing" />}
+              {isTyping && <TypingIndicator key="typing" statusText={typingStatus} />}
             </AnimatePresence>
             <div ref={bottomRef} />
           </div>
