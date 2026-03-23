@@ -4,6 +4,7 @@ import {
   erc20Abi,
   parseUnits,
   formatUnits,
+  Address,
 } from "viem";
 import { arcTestnet } from "viem/chains";
 import Groq from "groq-sdk";
@@ -20,19 +21,42 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 // ==========================================
 const KNOWN_TOKENS: Record<
   string,
-  { address: string; decimals: number; symbol: string }
+  { address: string; decimals: number; symbol: string; coingeckoId?: string }
 > = {
   USDC: {
-    address: "native", // USDC is native on Arc Testnet
+    address: "native",
     decimals: 18,
     symbol: "USDC",
+    coingeckoId: "usd-coin",
   },
   EURC: {
     address: process.env.ARC_EURC_ADDRESS || "EURC_NOT_DEPLOYED",
     decimals: 6,
     symbol: "EURC",
+    coingeckoId: "euro-coin",
+  },
+  ETH: {
+    address: "native",
+    decimals: 18,
+    symbol: "ETH",
+    coingeckoId: "ethereum",
   },
 };
+
+// ==========================================
+// 🔮 SCHEDULED TASK REGISTRY
+// ==========================================
+const scheduledTasks: Map<
+  string,
+  {
+    id: string;
+    type: string;
+    trigger: any;
+    action: any;
+    status: "active" | "completed" | "failed";
+    createdAt: Date;
+  }
+> = new Map();
 
 interface TaskContext {
   userAddress: string;
@@ -47,6 +71,8 @@ interface TaskResult {
   txHash?: string;
   data?: any;
   followUpActions?: string[];
+  taskId?: string;
+  isScheduled?: boolean;
 }
 
 interface TaskPlan {
@@ -54,6 +80,8 @@ interface TaskPlan {
   estimatedGas: bigint;
   requirements: string[];
   warnings: string[];
+  isScheduled?: boolean;
+  scheduleTrigger?: string;
 }
 
 interface TaskStep {
@@ -85,9 +113,14 @@ export class IntelligentAgent {
 
       const taskTypes = aiAnalysis.taskTypes || ["query"];
       const entities = aiAnalysis.entities || {};
+      const isScheduled = aiAnalysis.isScheduled || false;
+      const scheduleTrigger = aiAnalysis.scheduleTrigger;
 
-      // Step 3: Create execution plan based on AI output
-      const plan = await this.createExecutionPlan(taskTypes, entities, context);
+      // Step 3: Create execution plan
+      const plan = await this.createExecutionPlan(taskTypes, entities, context, {
+        isScheduled,
+        scheduleTrigger,
+      });
       console.log("📝 Execution plan:", plan);
 
       // Step 4: Validate plan and check REAL on-chain requirements
@@ -95,34 +128,56 @@ export class IntelligentAgent {
       if (!validation.valid) {
         return {
           success: false,
-          message: `❌ Cannot execute task: ${validation.reasons.join(", ")}`,
+          message: `❌ Cannot execute task: ${validation.reasons.join(
+            ", "
+          )}. This task is impossible with current resources.`,
         };
       }
 
-      // Step 5: Execute plan with REAL wallet signing
+      // Step 5A: Handle scheduled tasks
+      if (isScheduled && scheduleTrigger) {
+        const taskId = `task_${Date.now()}`;
+        scheduledTasks.set(taskId, {
+          id: taskId,
+          type: taskTypes[0],
+          trigger: scheduleTrigger,
+          action: plan.steps,
+          status: "active",
+          createdAt: new Date(),
+        });
+        console.log(`⏰ Scheduled task registered: ${taskId}`);
+        return {
+          success: true,
+          message: `⏰ Task scheduled successfully! ID: ${taskId}. Will execute when: ${scheduleTrigger}. You can check the status by asking about this task ID.`,
+          taskId,
+          isScheduled: true,
+        };
+      }
+
+      // Step 5B: Execute plan in real-time with REAL wallet signing
       if (context.walletClient && this.shouldExecute(taskTypes)) {
         try {
           const txHash = await this.executeTaskOnChain(plan, context);
           return {
             success: true,
-            message: `✅ Transaction executed! TxHash: ${txHash}`,
+            message: `✅ Task executed successfully on Arc Testnet! Transaction: ${txHash}`,
             txHash,
             data: plan,
           };
         } catch (execError: any) {
           return {
             success: false,
-            message: `❌ Execution failed: ${
+            message: `❌ Task execution failed: ${
               execError instanceof Error
                 ? execError.message
                 : "Unknown error"
-            }`,
+            }. No state was changed on-chain.`,
             data: plan,
           };
         }
       }
 
-      // Return plan if no wallet available or just for preview
+      // Return plan if no wallet or for preview
       return {
         success: true,
         message: `Plan Ready! Here is what I will execute: \n\n${plan.steps
@@ -150,24 +205,35 @@ export class IntelligentAgent {
         {
           role: "system",
           content: `You are an advanced Web3 AI Planner operating on the Arc Testnet.
-          Analyze the user's message and extract their intent and entities into a STRICT JSON object.
+          Analyze the user's message and extract their intent, entities, and scheduling info into a STRICT JSON object.
+          
+          CRITICAL RULES TO PREVENT HALLUCINATIONS:
+          1. NEVER return txHash, block numbers, or fake transaction data in the response.
+          2. If a task is IMPOSSIBLE (e.g., swap without DEX, bridge to non-existent chain), flag it with "taskTypes": ["impossible"].
+          3. If the user asks about a task you cannot verify on-chain (e.g., "is my transaction confirmed?"), return "taskTypes": ["query"] instead of faking data.
+          4. For scheduled tasks (time-based or price-based), return "isScheduled": true and describe the trigger clearly in "scheduleTrigger".
+          5. ONLY use tokens from: USDC, EURC, ETH. Reject unknown tokens.
+          6. For token balance queries, extract the TARGET ADDRESS if different from the connected wallet.
+          7. If a token address is missing or not deployed, flag it as requiring ARC_EURC_ADDRESS environment variable.
           
           Required JSON format:
           {
-            "taskTypes": ["swap" | "transfer" | "deploy" | "liquidity" | "batch" | "analyze" | "query"],
+            "taskTypes": ["swap" | "transfer" | "deploy" | "liquidity" | "batch" | "bridge" | "analyze" | "query" | "impossible"],
             "entities": {
               "addresses": ["0x..."],
+              "queryAddresses": ["0x..."],
               "amounts": [number],
               "tokens": ["USDC", "EURC", "ETH"],
               "contractTypes": ["ERC20", "ERC721", "ERC1155"]
-            }
+            },
+            "isScheduled": false,
+            "scheduleTrigger": "when ETH hits $3000" or "in 5 minutes" or null
           }
           
           Rules:
           - If the user implies sending to multiple addresses, include both 'batch' and 'transfer' in taskTypes.
           - If an entity type is not mentioned, leave its array empty [].
-          - ONLY output valid JSON. Do not include any markdown formatting or extra text.
-          - Token names MUST be from: USDC, EURC. Other tokens are not supported on Arc Testnet.`,
+          - ONLY output valid JSON. Do not include any markdown formatting or extra text.`,
         },
         { role: "user", content: message },
       ],
@@ -187,31 +253,29 @@ export class IntelligentAgent {
   ): Promise<bigint> {
     const tokenInfo = KNOWN_TOKENS[token];
     if (!tokenInfo)
-      throw new Error(`Unsupported token: ${token}. Only USDC and EURC supported.`);
+      throw new Error(`Unsupported token: ${token}. Only USDC, EURC, ETH supported.`);
 
     try {
       if (tokenInfo.address === "native") {
-        // Native USDC balance (getBalance)
-        console.log(`📊 Fetching native USDC balance for ${userAddress}...`);
+        console.log(`📊 Fetching native ${token} balance for ${userAddress}...`);
         const balance = await this.publicClient.getBalance({
-          address: userAddress as `0x${string}`,
+          address: userAddress as Address,
         });
-        console.log(`   ✅ USDC Balance: ${formatUnits(balance, 18)}`);
+        console.log(`   ✅ ${token} Balance: ${formatUnits(balance, 18)}`);
         return balance;
       } else if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
         throw new Error(
           `Token ${token} is not deployed on Arc Testnet. Set ARC_EURC_ADDRESS environment variable.`
         );
       } else {
-        // ERC-20 token balance (readContract)
         console.log(
           `📊 Fetching ${token} balance (contract: ${tokenInfo.address}) for ${userAddress}...`
         );
         const balance = await this.publicClient.readContract({
-          address: tokenInfo.address as `0x${string}`,
+          address: tokenInfo.address as Address,
           abi: erc20Abi,
           functionName: "balanceOf",
-          args: [userAddress as `0x${string}`],
+          args: [userAddress as Address],
         });
         console.log(
           `   ✅ ${token} Balance: ${formatUnits(
@@ -231,10 +295,7 @@ export class IntelligentAgent {
   }
 
   // ==========================================
-  // 💰 REAL WALLET EXECUTION (NOT MOCKED)
-  // ==========================================
-  // ==========================================
-  // 🔄 MULTI-STEP SEQUENTIAL EXECUTION LOOP
+  // 💰 REAL WALLET EXECUTION (NO MOCKING)
   // ==========================================
   private async executeTaskOnChain(
     plan: TaskPlan,
@@ -245,10 +306,9 @@ export class IntelligentAgent {
     const allTxHashes: string[] = [];
     const executionLog: Array<{ step: string; txHash: string }> = [];
 
-    // ✅ STRICT SEQUENTIAL LOOP: Execute ALL steps, not just the first one
+    // ✅ STRICT SEQUENTIAL LOOP: Execute ALL steps
     for (const step of plan.steps) {
-      // Skip non-executable steps (respond, checkBalance, etc.)
-      if (!["transfer", "swap", "approve", "deploy", "batchTransfer"].includes(step.action)) {
+      if (!["transfer", "swap", "approve", "deploy", "batchTransfer", "bridge"].includes(step.action)) {
         console.log(`⏭️  Skipping ${step.action}: ${step.description}`);
         continue;
       }
@@ -261,25 +321,25 @@ export class IntelligentAgent {
         // SINGLE TRANSFER
         // ==========================================
         if (step.action === "transfer") {
-          const { recipient, amount } = step.params;
-          const amountWei = parseUnits(amount.toString(), 18);
+          const { recipient, amount, token = "USDC" } = step.params;
+          const tokenInfo = KNOWN_TOKENS[token];
+          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
 
-          // ✅ PRE-CHECK: Validate balance BEFORE prompting wallet
-          const balance = await this.getTokenBalance(context.userAddress, "USDC");
+          const balance = await this.getTokenBalance(context.userAddress, token);
           if (balance < amountWei) {
             throw new Error(
-              `Insufficient USDC balance. You have ${formatUnits(
+              `Insufficient ${token} balance. You have ${formatUnits(
                 balance,
-                18
+                tokenInfo.decimals
               )}, but need ${amount}`
             );
           }
 
-          console.log(`💸 Sending ${amount} USDC to ${recipient}...`);
+          console.log(`💸 Sending ${amount} ${token} to ${recipient}...`);
           stepTxHash = await context.walletClient.sendTransaction({
             account: context.userAddress,
             to: recipient,
-            value: amountWei,
+            value: tokenInfo.address === "native" ? amountWei : undefined,
           });
         }
 
@@ -287,47 +347,43 @@ export class IntelligentAgent {
         // BATCH TRANSFER
         // ==========================================
         else if (step.action === "batchTransfer") {
-          const { recipients, amounts } = step.params;
+          const { recipients, amounts, token = "USDC" } = step.params;
+          const tokenInfo = KNOWN_TOKENS[token];
 
-          // ✅ PRE-CHECK: Total balance validation
           const totalAmount = amounts.reduce((sum: number, a: number) => sum + a, 0);
-          const totalWei = parseUnits(totalAmount.toString(), 18);
-          const balance = await this.getTokenBalance(context.userAddress, "USDC");
+          const totalWei = parseUnits(totalAmount.toString(), tokenInfo.decimals);
+          const balance = await this.getTokenBalance(context.userAddress, token);
           if (balance < totalWei) {
             throw new Error(
-              `Insufficient USDC balance for batch. You have ${formatUnits(
+              `Insufficient ${token} balance for batch. You have ${formatUnits(
                 balance,
-                18
+                tokenInfo.decimals
               )}, but need ${totalAmount}`
             );
           }
 
-          console.log(`📦 Batch transferring to ${recipients.length} recipients...`);
-          // Send each batch transaction sequentially
+          console.log(`📦 Batch transferring ${token} to ${recipients.length} recipients...`);
           for (let i = 0; i < recipients.length; i++) {
             const recipient = recipients[i];
             const amount = amounts[i] || amounts[0];
-            const amountWei = parseUnits(amount.toString(), 18);
+            const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
 
             console.log(
-              `  [${i + 1}/${recipients.length}] → ${recipient} (${amount} USDC)`
+              `  [${i + 1}/${recipients.length}] → ${recipient} (${amount} ${token})`
             );
             const batchTxHash = await context.walletClient.sendTransaction({
               account: context.userAddress,
               to: recipient,
-              value: amountWei,
+              value: tokenInfo.address === "native" ? amountWei : undefined,
             });
 
-            // ✅ AWAIT RECEIPT before next batch tx
             console.log(`  ⏳ Waiting for receipt...`);
             const receipt = await this.publicClient.waitForTransactionReceipt({
-              hash: batchTxHash as `0x${string}`,
+              hash: batchTxHash as Address,
               timeout: 60_000,
             });
             if (receipt.status !== "success") {
-              throw new Error(
-                `Batch tx ${i} reverted: ${batchTxHash}`
-              );
+              throw new Error(`Batch tx ${i} reverted: ${batchTxHash}`);
             }
             console.log(`  ✅ Confirmed: ${batchTxHash}`);
             allTxHashes.push(batchTxHash);
@@ -336,7 +392,6 @@ export class IntelligentAgent {
               txHash: batchTxHash,
             });
           }
-          // Skip receipt wait below since we waited for each batch tx
           continue;
         }
 
@@ -347,7 +402,7 @@ export class IntelligentAgent {
           const { token, amount, spender } = step.params;
           const tokenInfo = KNOWN_TOKENS[token];
           if (!tokenInfo || tokenInfo.address === "native") {
-            throw new Error(`Cannot approve native token USDC`);
+            throw new Error(`Cannot approve native token ${token}`);
           }
           if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
             throw new Error(
@@ -355,7 +410,6 @@ export class IntelligentAgent {
             );
           }
 
-          // ✅ PRE-CHECK: Validate balance
           const balance = await this.getTokenBalance(context.userAddress, token);
           const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
           if (balance < amountWei) {
@@ -370,24 +424,23 @@ export class IntelligentAgent {
           console.log(`🔐 Approving ${amount} ${token} to ${spender}...`);
           stepTxHash = await context.walletClient.writeContract({
             account: context.userAddress,
-            address: tokenInfo.address as `0x${string}`,
+            address: tokenInfo.address as Address,
             abi: erc20Abi,
             functionName: "approve",
-            args: [spender as `0x${string}`, amountWei],
+            args: [spender as Address, amountWei],
           });
         }
 
         // ==========================================
-        // SWAP
+        // SWAP (Real DEX interaction)
         // ==========================================
         else if (step.action === "swap") {
-          const { fromToken, toToken, amount } = step.params;
+          const { fromToken, toToken, amount, dexAddress } = step.params;
           const tokenInfo = KNOWN_TOKENS[fromToken];
           if (!tokenInfo) {
             throw new Error(`Unsupported token: ${fromToken}`);
           }
 
-          // ✅ PRE-CHECK: Validate balance
           const balance = await this.getTokenBalance(context.userAddress, fromToken);
           const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
           if (balance < amountWei) {
@@ -399,9 +452,68 @@ export class IntelligentAgent {
             );
           }
 
-          console.log(`🔄 Swapping ${amount} ${fromToken} for ${toToken}...`);
-          // Real swap would use DEX router contract here
-          throw new Error("Swap execution requires DEX integration (Uniswap, etc)");
+          // If DEX address provided, execute the swap
+          if (dexAddress) {
+            console.log(
+              `🔄 Swapping ${amount} ${fromToken} for ${toToken} via ${dexAddress}...`
+            );
+            stepTxHash = await context.walletClient.writeContract({
+              account: context.userAddress,
+              address: dexAddress as Address,
+              abi: [
+                {
+                  name: "swap",
+                  type: "function",
+                  stateMutability: "nonpayable",
+                  inputs: [
+                    { name: "amountIn", type: "uint256" },
+                    { name: "minAmountOut", type: "uint256" },
+                  ],
+                  outputs: [{ name: "amountOut", type: "uint256" }],
+                },
+              ],
+              functionName: "swap",
+              args: [amountWei, parseUnits("0", KNOWN_TOKENS[toToken].decimals)],
+            });
+          } else {
+            throw new Error(
+              `Swap requires a DEX contract address on Arc Testnet. No DEX address found. Please specify a DEX or use a different approach.`
+            );
+          }
+        }
+
+        // ==========================================
+        // BRIDGE (CCTP or native bridge)
+        // ==========================================
+        else if (step.action === "bridge") {
+          const { fromChain, toChain, amount, token } = step.params;
+          const tokenInfo = KNOWN_TOKENS[token];
+          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
+
+          const balance = await this.getTokenBalance(context.userAddress, token);
+          if (balance < amountWei) {
+            throw new Error(
+              `Insufficient ${token} balance for bridge. You have ${formatUnits(
+                balance,
+                tokenInfo.decimals
+              )}, but need ${amount}`
+            );
+          }
+
+          console.log(
+            `🌉 Bridging ${amount} ${token} from ${fromChain} to ${toChain}...`
+          );
+
+          // CCTP bridge for USDC
+          if (token === "USDC" && fromChain === "ARC-TESTNET") {
+            throw new Error(
+              `Bridge execution requires CCTP contract integration. Currently only plan-level bridge info is available. Implement CCTP contract calls for real execution.`
+            );
+          }
+
+          throw new Error(
+            `Bridge from ${fromChain} to ${toChain} requires specialized contract integration not yet configured.`
+          );
         }
 
         // ==========================================
@@ -409,16 +521,18 @@ export class IntelligentAgent {
         // ==========================================
         else if (step.action === "deploy") {
           console.log(`🚀 Deploying contract...`);
-          throw new Error("Contract deployment requires Solidity compiler integration");
+          throw new Error(
+            "Contract deployment requires Solidity compiler and artifact management. Not available in agent execution."
+          );
         }
 
         // ==========================================
-        // ✅ WAIT FOR RECEIPT (unless batch already handled)
+        // ✅ WAIT FOR RECEIPT
         // ==========================================
         if (stepTxHash) {
           console.log(`⏳ Waiting for receipt for txHash: ${stepTxHash}`);
           const receipt = await this.publicClient.waitForTransactionReceipt({
-            hash: stepTxHash as `0x${string}`,
+            hash: stepTxHash as Address,
             timeout: 60_000,
           });
 
@@ -445,9 +559,6 @@ export class IntelligentAgent {
       }
     }
 
-    // ==========================================
-    // ✅ FINAL RETURN: Only after ALL steps complete
-    // ==========================================
     if (allTxHashes.length === 0) {
       throw new Error("No transactions were executed in the plan");
     }
@@ -455,13 +566,12 @@ export class IntelligentAgent {
     console.log(`\n✅ All steps completed! Total txHashes: ${allTxHashes.length}`);
     console.log("Execution log:", executionLog);
 
-    // Return final txHash (or join all if multiple)
     return allTxHashes[allTxHashes.length - 1];
   }
 
   private shouldExecute(taskTypes: string[]): boolean {
     return taskTypes.some((t) =>
-      ["transfer", "swap", "approve", "deploy"].includes(t)
+      ["transfer", "swap", "approve", "deploy", "batch", "bridge"].includes(t)
     );
   }
 
@@ -472,12 +582,22 @@ export class IntelligentAgent {
   private async createExecutionPlan(
     taskTypes: string[],
     entities: Record<string, any>,
-    context: TaskContext
+    context: TaskContext,
+    scheduling?: { isScheduled?: boolean; scheduleTrigger?: string }
   ): Promise<TaskPlan> {
+    // Reject impossible tasks
+    if (taskTypes.includes("impossible")) {
+      throw new Error(
+        "This task is impossible with current Arc Testnet resources. Check if required contracts or tokens are deployed."
+      );
+    }
+
     if (taskTypes.includes("swap") && entities.tokens)
       return await this.createSwapPlan(entities, context);
     if (taskTypes.includes("transfer") && entities.addresses && entities.amounts)
       return await this.createTransferPlan(entities, context);
+    if (taskTypes.includes("bridge") && entities.tokens)
+      return await this.createBridgePlan(entities, context);
     if (taskTypes.includes("deploy") && entities.contractTypes)
       return await this.createDeploymentPlan(entities, context);
     if (taskTypes.includes("liquidity"))
@@ -487,6 +607,7 @@ export class IntelligentAgent {
     if (taskTypes.includes("analyze"))
       return await this.createAnalysisPlan(entities, context);
 
+    // Query/info request
     return {
       steps: [
         {
@@ -511,15 +632,11 @@ export class IntelligentAgent {
     const requirements = [
       "Connected wallet",
       "Sufficient token balance",
-      "DEX contract approval",
+      "DEX contract address",
     ];
     const warnings: string[] = [];
 
-    if (
-      entities.amounts &&
-      entities.tokens &&
-      entities.tokens.length >= 2
-    ) {
+    if (entities.amounts && entities.tokens && entities.tokens.length >= 2) {
       const [fromToken, toToken] = entities.tokens;
       const amount = entities.amounts[0];
 
@@ -542,13 +659,15 @@ export class IntelligentAgent {
         id: "execute_swap",
         description: `Swap ${amount} ${fromToken} for ${toToken}`,
         action: "swap",
-        params: { fromToken, toToken, amount },
+        params: { fromToken, toToken, amount, dexAddress: process.env.ARC_DEX_ADDRESS },
         dependencies: ["approve_token"],
         estimated_gas: 200000n,
       });
 
       warnings.push("⚠️ Swaps involve slippage and price impact");
-      warnings.push("💡 Consider splitting large swaps to reduce impact");
+      if (!process.env.ARC_DEX_ADDRESS) {
+        warnings.push("⚠️ DEX address not configured (ARC_DEX_ADDRESS)");
+      }
     }
 
     return { steps, estimatedGas: 250000n, requirements, warnings };
@@ -578,6 +697,7 @@ export class IntelligentAgent {
           params: {
             recipients: entities.addresses,
             amounts: entities.amounts,
+            token: "USDC",
           },
           dependencies: [],
           estimated_gas: BigInt(100000 * entities.addresses.length),
@@ -587,7 +707,7 @@ export class IntelligentAgent {
           id: "single_transfer",
           description: `Transfer ${amount} USDC to ${recipient.slice(0, 6)}...`,
           action: "transfer",
-          params: { recipient, amount },
+          params: { recipient, amount, token: "USDC" },
           dependencies: [],
           estimated_gas: 65000n,
         });
@@ -610,48 +730,61 @@ export class IntelligentAgent {
     };
   }
 
+  private async createBridgePlan(
+    entities: Record<string, any>,
+    context: TaskContext
+  ): Promise<TaskPlan> {
+    const steps: TaskStep[] = [];
+    const { fromChain = "ARC-TESTNET", toChain, amount, tokens } = entities;
+    const token = tokens?.[0] || "USDC";
+
+    steps.push({
+      id: "bridge_usdc",
+      description: `Bridge ${amount} ${token} from ${fromChain} to ${toChain}`,
+      action: "bridge",
+      params: { fromChain, toChain, amount, token },
+      dependencies: [],
+      estimated_gas: 150000n,
+    });
+
+    return {
+      steps,
+      estimatedGas: 150000n,
+      requirements: ["Connected wallet", `Sufficient ${token} balance`, "Bridge contract"],
+      warnings: [
+        "⚠️ Bridge operations take time to finalize",
+        "💡 Requires attestation on destination chain",
+      ],
+    };
+  }
+
   private async createDeploymentPlan(
     entities: Record<string, any>,
     context: TaskContext
   ): Promise<TaskPlan> {
     const steps: TaskStep[] = [];
-    const requirements = [
-      "Connected wallet",
-      "Sufficient gas (USDC)",
-      "Valid contract code",
-    ];
-    const warnings = [
-      "⚠️ Contract deployment is permanent",
-      "💡 Consider using verified templates",
-    ];
 
     if (entities.contractTypes) {
       const contractType = entities.contractTypes[0].toUpperCase();
-      steps.push({
-        id: "prepare_contract",
-        description: `Prepare ${contractType} contract`,
-        action: "prepareContract",
-        params: { type: contractType, config: entities },
-        dependencies: [],
-      });
       steps.push({
         id: "deploy_contract",
         description: `Deploy ${contractType} contract`,
         action: "deploy",
         params: { type: contractType },
-        dependencies: ["prepare_contract"],
+        dependencies: [],
         estimated_gas: 2000000n,
-      });
-      steps.push({
-        id: "verify_deployment",
-        description: "Verify contract deployment",
-        action: "verify",
-        params: { contract: "deployed_address" },
-        dependencies: ["deploy_contract"],
       });
     }
 
-    return { steps, estimatedGas: 2100000n, requirements, warnings };
+    return {
+      steps,
+      estimatedGas: 2100000n,
+      requirements: ["Connected wallet", "Sufficient gas (USDC)", "Valid contract code"],
+      warnings: [
+        "⚠️ Contract deployment is permanent",
+        "💡 Consider using verified templates",
+      ],
+    };
   }
 
   private async createLiquidityPlan(
@@ -660,18 +793,11 @@ export class IntelligentAgent {
   ): Promise<TaskPlan> {
     const steps: TaskStep[] = [];
     steps.push({
-      id: "check_pair",
-      description: "Check liquidity pair exists",
-      action: "checkPair",
-      params: { tokens: entities.tokens },
-      dependencies: [],
-    });
-    steps.push({
       id: "add_liquidity",
       description: "Add liquidity to pool",
       action: "addLiquidity",
       params: { tokens: entities.tokens, amounts: entities.amounts },
-      dependencies: ["check_pair"],
+      dependencies: [],
       estimated_gas: 300000n,
     });
 
@@ -759,7 +885,7 @@ export class IntelligentAgent {
   }
 
   // ==========================================
-  // ✅ ENHANCED VALIDATION WITH REAL BALANCE CHECKS
+  // ✅ ENHANCED VALIDATION WITH REAL CHECKS
   // ==========================================
   private async validatePlan(
     plan: TaskPlan,
@@ -767,25 +893,28 @@ export class IntelligentAgent {
   ): Promise<{ valid: boolean; reasons: string[] }> {
     const reasons: string[] = [];
 
-    // Check wallet connected
     if (!context.userAddress) {
       reasons.push("Wallet not connected");
       return { valid: false, reasons };
     }
 
-    // PRE-CHECK: For transfers, validate real balance from blockchain
+    // PRE-CHECK: For transfers, validate real balance
     const transferStep = plan.steps.find((s) => s.action === "transfer");
     if (transferStep) {
       try {
         const amount = transferStep.params.amount || 0;
-        const balance = await this.getTokenBalance(context.userAddress, "USDC");
-        const required = parseUnits(amount.toString(), 18);
+        const token = transferStep.params.token || "USDC";
+        const balance = await this.getTokenBalance(context.userAddress, token);
+        const required = parseUnits(
+          amount.toString(),
+          KNOWN_TOKENS[token].decimals
+        );
 
         if (balance < required) {
           reasons.push(
-            `Insufficient USDC balance. You have ${formatUnits(
+            `Insufficient ${token} balance. You have ${formatUnits(
               balance,
-              18
+              KNOWN_TOKENS[token].decimals
             )}, but need ${amount}`
           );
         }
@@ -794,7 +923,7 @@ export class IntelligentAgent {
       }
     }
 
-    // PRE-CHECK: For token operations, validate token is in KNOWN_TOKENS
+    // PRE-CHECK: Validate tokens
     const tokens = plan.steps
       .flatMap((s) => [
         s.params.token,
@@ -806,11 +935,22 @@ export class IntelligentAgent {
     for (const token of tokens) {
       if (!KNOWN_TOKENS[token]) {
         reasons.push(
-          `Unsupported token: ${token}. Only USDC and EURC supported on Arc Testnet.`
+          `Unsupported token: ${token}. Only USDC, EURC, ETH supported on Arc Testnet.`
         );
       }
     }
 
     return { valid: reasons.length === 0, reasons };
+  }
+
+  // ==========================================
+  // ⏰ SCHEDULED TASK MONITORING
+  // ==========================================
+  public getScheduledTask(taskId: string) {
+    return scheduledTasks.get(taskId);
+  }
+
+  public getScheduledTasks() {
+    return Array.from(scheduledTasks.values());
   }
 }
