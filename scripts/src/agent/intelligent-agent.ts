@@ -189,28 +189,52 @@ export class IntelligentAgent {
     if (!tokenInfo)
       throw new Error(`Unsupported token: ${token}. Only USDC and EURC supported.`);
 
-    if (tokenInfo.address === "native") {
-      // Native USDC balance (getBalance)
-      return await this.publicClient.getBalance({
-        address: userAddress as `0x${string}`,
-      });
-    } else if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
-      // ERC-20 token balance (readContract)
-      const balance = await this.publicClient.readContract({
-        address: tokenInfo.address as `0x${string}`,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [userAddress as `0x${string}`],
-      });
-      return balance as bigint;
+    try {
+      if (tokenInfo.address === "native") {
+        // Native USDC balance (getBalance)
+        console.log(`📊 Fetching native USDC balance for ${userAddress}...`);
+        const balance = await this.publicClient.getBalance({
+          address: userAddress as `0x${string}`,
+        });
+        console.log(`   ✅ USDC Balance: ${formatUnits(balance, 18)}`);
+        return balance;
+      } else if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
+        throw new Error(
+          `Token ${token} is not deployed on Arc Testnet. Set ARC_EURC_ADDRESS environment variable.`
+        );
+      } else {
+        // ERC-20 token balance (readContract)
+        console.log(
+          `📊 Fetching ${token} balance (contract: ${tokenInfo.address}) for ${userAddress}...`
+        );
+        const balance = await this.publicClient.readContract({
+          address: tokenInfo.address as `0x${string}`,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [userAddress as `0x${string}`],
+        });
+        console.log(
+          `   ✅ ${token} Balance: ${formatUnits(
+            balance as bigint,
+            tokenInfo.decimals
+          )}`
+        );
+        return balance as bigint;
+      }
+    } catch (error: any) {
+      const errorMsg =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to fetch ${token} balance: ${errorMsg}. Ensure ARC_EURC_ADDRESS is set correctly if using EURC.`
+      );
     }
-    throw new Error(
-      `Token ${token} not deployed on Arc Testnet (ARC_EURC_ADDRESS not set)`
-    );
   }
 
   // ==========================================
   // 💰 REAL WALLET EXECUTION (NOT MOCKED)
+  // ==========================================
+  // ==========================================
+  // 🔄 MULTI-STEP SEQUENTIAL EXECUTION LOOP
   // ==========================================
   private async executeTaskOnChain(
     plan: TaskPlan,
@@ -218,109 +242,221 @@ export class IntelligentAgent {
   ): Promise<string> {
     if (!context.walletClient) throw new Error("No wallet client available");
 
-    // Execute first step that requires on-chain action
-    const execStep = plan.steps.find((s) =>
-      ["transfer", "swap", "approve", "deploy"].includes(s.action)
-    );
-    if (!execStep) throw new Error("No executable step in plan");
+    const allTxHashes: string[] = [];
+    const executionLog: Array<{ step: string; txHash: string }> = [];
 
-    let txHash: string | undefined;
+    // ✅ STRICT SEQUENTIAL LOOP: Execute ALL steps, not just the first one
+    for (const step of plan.steps) {
+      // Skip non-executable steps (respond, checkBalance, etc.)
+      if (!["transfer", "swap", "approve", "deploy", "batchTransfer"].includes(step.action)) {
+        console.log(`⏭️  Skipping ${step.action}: ${step.description}`);
+        continue;
+      }
 
-    // TRANSFER: Send real transaction via walletClient
-    if (execStep.action === "transfer") {
-      const { recipient, amount } = execStep.params;
-      const amountWei = parseUnits(amount.toString(), 18); // USDC is 18 decimals
+      console.log(`\n📝 Executing step: ${step.id} (${step.action})`);
+      let stepTxHash: string | undefined;
 
-      // ✅ PRE-CHECK: Validate balance BEFORE prompting wallet
-      const balance = await this.getTokenBalance(context.userAddress, "USDC");
-      if (balance < amountWei) {
+      try {
+        // ==========================================
+        // SINGLE TRANSFER
+        // ==========================================
+        if (step.action === "transfer") {
+          const { recipient, amount } = step.params;
+          const amountWei = parseUnits(amount.toString(), 18);
+
+          // ✅ PRE-CHECK: Validate balance BEFORE prompting wallet
+          const balance = await this.getTokenBalance(context.userAddress, "USDC");
+          if (balance < amountWei) {
+            throw new Error(
+              `Insufficient USDC balance. You have ${formatUnits(
+                balance,
+                18
+              )}, but need ${amount}`
+            );
+          }
+
+          console.log(`💸 Sending ${amount} USDC to ${recipient}...`);
+          stepTxHash = await context.walletClient.sendTransaction({
+            account: context.userAddress,
+            to: recipient,
+            value: amountWei,
+          });
+        }
+
+        // ==========================================
+        // BATCH TRANSFER
+        // ==========================================
+        else if (step.action === "batchTransfer") {
+          const { recipients, amounts } = step.params;
+
+          // ✅ PRE-CHECK: Total balance validation
+          const totalAmount = amounts.reduce((sum: number, a: number) => sum + a, 0);
+          const totalWei = parseUnits(totalAmount.toString(), 18);
+          const balance = await this.getTokenBalance(context.userAddress, "USDC");
+          if (balance < totalWei) {
+            throw new Error(
+              `Insufficient USDC balance for batch. You have ${formatUnits(
+                balance,
+                18
+              )}, but need ${totalAmount}`
+            );
+          }
+
+          console.log(`📦 Batch transferring to ${recipients.length} recipients...`);
+          // Send each batch transaction sequentially
+          for (let i = 0; i < recipients.length; i++) {
+            const recipient = recipients[i];
+            const amount = amounts[i] || amounts[0];
+            const amountWei = parseUnits(amount.toString(), 18);
+
+            console.log(
+              `  [${i + 1}/${recipients.length}] → ${recipient} (${amount} USDC)`
+            );
+            const batchTxHash = await context.walletClient.sendTransaction({
+              account: context.userAddress,
+              to: recipient,
+              value: amountWei,
+            });
+
+            // ✅ AWAIT RECEIPT before next batch tx
+            console.log(`  ⏳ Waiting for receipt...`);
+            const receipt = await this.publicClient.waitForTransactionReceipt({
+              hash: batchTxHash as `0x${string}`,
+              timeout: 60_000,
+            });
+            if (receipt.status !== "success") {
+              throw new Error(
+                `Batch tx ${i} reverted: ${batchTxHash}`
+              );
+            }
+            console.log(`  ✅ Confirmed: ${batchTxHash}`);
+            allTxHashes.push(batchTxHash);
+            executionLog.push({
+              step: `batch[${i}]`,
+              txHash: batchTxHash,
+            });
+          }
+          // Skip receipt wait below since we waited for each batch tx
+          continue;
+        }
+
+        // ==========================================
+        // APPROVE ERC-20
+        // ==========================================
+        else if (step.action === "approve") {
+          const { token, amount, spender } = step.params;
+          const tokenInfo = KNOWN_TOKENS[token];
+          if (!tokenInfo || tokenInfo.address === "native") {
+            throw new Error(`Cannot approve native token USDC`);
+          }
+          if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
+            throw new Error(
+              `Token ${token} is not deployed on Arc Testnet (ARC_EURC_ADDRESS env var not set)`
+            );
+          }
+
+          // ✅ PRE-CHECK: Validate balance
+          const balance = await this.getTokenBalance(context.userAddress, token);
+          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
+          if (balance < amountWei) {
+            throw new Error(
+              `Insufficient ${token} balance. You have ${formatUnits(
+                balance,
+                tokenInfo.decimals
+              )}, but need ${amount}`
+            );
+          }
+
+          console.log(`🔐 Approving ${amount} ${token} to ${spender}...`);
+          stepTxHash = await context.walletClient.writeContract({
+            account: context.userAddress,
+            address: tokenInfo.address as `0x${string}`,
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [spender as `0x${string}`, amountWei],
+          });
+        }
+
+        // ==========================================
+        // SWAP
+        // ==========================================
+        else if (step.action === "swap") {
+          const { fromToken, toToken, amount } = step.params;
+          const tokenInfo = KNOWN_TOKENS[fromToken];
+          if (!tokenInfo) {
+            throw new Error(`Unsupported token: ${fromToken}`);
+          }
+
+          // ✅ PRE-CHECK: Validate balance
+          const balance = await this.getTokenBalance(context.userAddress, fromToken);
+          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
+          if (balance < amountWei) {
+            throw new Error(
+              `Insufficient ${fromToken} balance. You have ${formatUnits(
+                balance,
+                tokenInfo.decimals
+              )}, but need ${amount}`
+            );
+          }
+
+          console.log(`🔄 Swapping ${amount} ${fromToken} for ${toToken}...`);
+          // Real swap would use DEX router contract here
+          throw new Error("Swap execution requires DEX integration (Uniswap, etc)");
+        }
+
+        // ==========================================
+        // DEPLOY
+        // ==========================================
+        else if (step.action === "deploy") {
+          console.log(`🚀 Deploying contract...`);
+          throw new Error("Contract deployment requires Solidity compiler integration");
+        }
+
+        // ==========================================
+        // ✅ WAIT FOR RECEIPT (unless batch already handled)
+        // ==========================================
+        if (stepTxHash) {
+          console.log(`⏳ Waiting for receipt for txHash: ${stepTxHash}`);
+          const receipt = await this.publicClient.waitForTransactionReceipt({
+            hash: stepTxHash as `0x${string}`,
+            timeout: 60_000,
+          });
+
+          if (receipt.status !== "success") {
+            throw new Error(
+              `Transaction reverted on-chain. TxHash: ${stepTxHash}. Status: ${receipt.status}`
+            );
+          }
+
+          console.log(`✅ Step confirmed: ${stepTxHash}`);
+          allTxHashes.push(stepTxHash);
+          executionLog.push({
+            step: step.id,
+            txHash: stepTxHash,
+          });
+        }
+      } catch (stepError: any) {
+        console.error(`❌ Step ${step.id} failed:`, stepError.message);
         throw new Error(
-          `Insufficient USDC balance. You have ${formatUnits(
-            balance,
-            18
-          )}, but need ${amount}`
+          `Failed at step "${step.description}": ${
+            stepError instanceof Error ? stepError.message : String(stepError)
+          }`
         );
       }
-
-      // Send real transaction — prompts wallet (MetaMask)
-      txHash = await context.walletClient.sendTransaction({
-        account: context.userAddress,
-        to: recipient,
-        value: amountWei,
-      });
     }
 
-    // APPROVE: Approve ERC-20 spending for DEX
-    if (execStep.action === "approve") {
-      const { token, amount, spender } = execStep.params;
-      const tokenInfo = KNOWN_TOKENS[token];
-      if (!tokenInfo || tokenInfo.address === "native") {
-        throw new Error(`Cannot approve native token`);
-      }
-
-      // ✅ PRE-CHECK: Validate balance
-      const balance = await this.getTokenBalance(context.userAddress, token);
-      const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-      if (balance < amountWei) {
-        throw new Error(
-          `Insufficient ${token} balance. You have ${formatUnits(
-            balance,
-            tokenInfo.decimals
-          )}, but need ${amount}`
-        );
-      }
-
-      // Send real approval transaction
-      txHash = await context.walletClient.writeContract({
-        account: context.userAddress,
-        address: tokenInfo.address,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [spender as `0x${string}`, amountWei],
-      });
+    // ==========================================
+    // ✅ FINAL RETURN: Only after ALL steps complete
+    // ==========================================
+    if (allTxHashes.length === 0) {
+      throw new Error("No transactions were executed in the plan");
     }
 
-    // SWAP: Placeholder (real swap would use DEX interface)
-    if (execStep.action === "swap") {
-      const { fromToken, amount } = execStep.params;
+    console.log(`\n✅ All steps completed! Total txHashes: ${allTxHashes.length}`);
+    console.log("Execution log:", executionLog);
 
-      // ✅ PRE-CHECK: Validate balance
-      const balance = await this.getTokenBalance(
-        context.userAddress,
-        fromToken
-      );
-      const tokenInfo = KNOWN_TOKENS[fromToken];
-      const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-      if (balance < amountWei) {
-        throw new Error(
-          `Insufficient ${fromToken} balance. You have ${formatUnits(
-            balance,
-            tokenInfo.decimals
-          )}, but need ${amount}`
-        );
-      }
-
-      // Real swap would be signed here (using DEX contract interface)
-      throw new Error("Swap execution requires DEX integration");
-    }
-
-    if (!txHash) throw new Error("Transaction signing cancelled or failed");
-
-    // ✅ WAIT FOR REAL ON-CHAIN RECEIPT (NOT MOCKED)
-    console.log(`⏳ Waiting for receipt for txHash: ${txHash}`);
-    const receipt = await this.publicClient.waitForTransactionReceipt({
-      hash: txHash as `0x${string}`,
-      timeout: 60_000,
-    });
-
-    if (receipt.status !== "success") {
-      throw new Error(
-        `Transaction reverted on-chain. TxHash: ${txHash}. Status: ${receipt.status}`
-      );
-    }
-
-    console.log(`✅ Transaction confirmed on Arc Testnet: ${txHash}`);
-    return txHash;
+    // Return final txHash (or join all if multiple)
+    return allTxHashes[allTxHashes.length - 1];
   }
 
   private shouldExecute(taskTypes: string[]): boolean {
