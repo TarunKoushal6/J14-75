@@ -604,7 +604,7 @@ export default function Dashboard() {
               {getQuickActions(wallet.connected ? wallet.address : undefined).map((action) => (
                 <motion.button key={action.label}
                   whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                  onClick={() => sendMessage(action.prompt)} disabled={isTyping}
+                  onClick={() => sendMessage(action.prompt)} disabled={isTyping || !wallet.connected}
                   className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg text-[11px] font-medium disabled:opacity-40 transition-all"
                   style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.65)" }}>
                   <action.icon size={11} style={{ color: "#FF6B00" }} />
@@ -619,7 +619,7 @@ export default function Dashboard() {
               <textarea
                 ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                placeholder="Ask J14-75 anything…" rows={1} disabled={isTyping}
+                placeholder={wallet.connected ? "Ask J14-75 anything…" : "Connect wallet first"} rows={1} disabled={isTyping || !wallet.connected}
                 className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed py-1 disabled:opacity-50 min-w-0"
                 style={{ color: "rgba(255,255,255,0.85)", maxHeight: 100, caretColor: "#FF6B00" }}
                 onInput={(e) => {
@@ -629,7 +629,7 @@ export default function Dashboard() {
                 }}
               />
               <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.93 }}
-                onClick={() => sendMessage()} disabled={!input.trim() || isTyping}
+                onClick={() => sendMessage()} disabled={!input.trim() || isTyping || !wallet.connected}
                 className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 disabled:opacity-30"
                 style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>
                 <Send size={14} className="text-black" style={{ transform: "translateX(1px)" }} />

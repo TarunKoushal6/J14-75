@@ -187,10 +187,10 @@ async function executeTool(
     try {
       const balance = await fetchBalance(addr);
       return {
-        text: `address: ${addr}\nnetwork: Arc Testnet (chainId 5042002)\nbalance: ${balance} USDC (native, 18 decimals)\nblock: latest`,
+        text: `Wallet ${addr} on Arc Testnet has a balance of ${balance} USDC. Block latest.`,
       };
     } catch {
-      return { text: `RPC query failed for ${addr} — Arc Testnet may be temporarily unreachable.` };
+      return { text: `RPC query failed for ${addr}. Arc Testnet may be temporarily unreachable.` };
     }
   }
 
@@ -227,15 +227,7 @@ async function executeTool(
       const balanceAfter = await fetchBalance(walletAddress || recipient).catch(() => "N/A");
 
       return {
-        text: `transaction broadcast and confirmed on Arc Testnet
-txHash: ${txHash}
-from: ${wallet_id} (Circle SCA)
-to: ${recipient}
-amount: ${amount} USDC
-block: ${parseInt(receipt?.blockNumber ?? "0x0", 16)}
-status: ${confirmed ? "SUCCESS" : "REVERTED"}
-balance after: ${balanceAfter} USDC
-explorer: ${ARC_EXPLORER}/tx/${txHash}`,
+        text: `Transaction confirmed on Arc Testnet. TxHash: ${txHash}. Sent ${amount} USDC from Circle wallet to ${recipient}. Block ${parseInt(receipt?.blockNumber ?? "0x0", 16)}. Status: ${confirmed ? "SUCCESS" : "REVERTED"}. Balance after: ${balanceAfter} USDC.`,
         txHash,
       };
     } catch (err: any) {
@@ -264,13 +256,7 @@ explorer: ${ARC_EXPLORER}/tx/${txHash}`,
       if (!wallet) throw new Error("Circle wallet creation returned no wallet");
 
       return {
-        text: `Circle SCA wallet created on Arc Testnet
-wallet_id: ${wallet.id}
-address: ${wallet.address ?? "pending — check Circle dashboard"}
-wallet_set_id: ${walletSetId}
-type: Smart Contract Account (SCA)
-label: ${label}
-note: Fund this address with USDC on Arc Testnet before sending transactions.`,
+        text: `Circle SCA wallet created on Arc Testnet. Wallet ID: ${wallet.id}. Address: ${wallet.address ?? "pending"}. Wallet set ID: ${walletSetId}. Type is Smart Contract Account. Fund this address with USDC on Arc Testnet before sending transactions.`,
       };
     } catch (err: any) {
       return { text: `Wallet creation failed: ${err?.message ?? String(err)}` };
@@ -288,14 +274,7 @@ note: Fund this address with USDC on Arc Testnet before sending transactions.`,
       const erc8004 = address.toLowerCase().startsWith("0x8004") ? "VERIFIED" : "UNVERIFIED";
       const riskScore = isContract ? 92 : 0;
       return {
-        text: `contract audit — ${address}
-network: Arc Testnet
-type: ${isContract ? `smart contract (${sizeBytes} bytes)` : "EOA — not a contract"}
-tx count: ${txCount}
-risk score: ${isContract ? `${riskScore}/100 — LOW RISK` : "N/A"}
-erc-8004 compliance: ${erc8004}
-bytecode checksum: ${bytecode.slice(2, 10)}...
-findings: No critical vulnerabilities in bytecode signature analysis.`,
+        text: `Contract audit for ${address} on Arc Testnet. Type: ${isContract ? `smart contract with ${sizeBytes} bytes of bytecode` : "EOA, not a contract"}. Transaction count: ${txCount}. Risk score: ${isContract ? `${riskScore}/100 (LOW RISK)` : "N/A"}. ERC-8004 compliance: ${erc8004}. Bytecode checksum ${bytecode.slice(2, 10)}. No critical vulnerabilities detected in bytecode analysis.`,
       };
     } catch {
       return { text: `Audit failed for ${address} on Arc Testnet.` };
@@ -308,28 +287,7 @@ findings: No critical vulnerabilities in bytecode signature analysis.`,
     const from = args.from_chain ?? "ETH-SEPOLIA";
     const to = args.to_chain ?? "ARC-TESTNET";
     return {
-      text: `cctp bridge route: ${from} → ${to}
-amount: ${amount} USDC
-protocol: Circle CCTP v2
-
-step 1 — approve: authorize ${amount} USDC to TokenMessenger on ${from}
-  contract: 0xBd3fa81B58Ba92a82136038B25aDec7066af3155
-  function: approve(address spender, uint256 amount)
-
-step 2 — burn: depositForBurn() on ${from}
-  contract: 0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5
-  function: depositForBurn(uint256,uint32,bytes32,address)
-  destination_domain: 9 (Arc Testnet)
-
-step 3 — attest: poll Circle Attestation API (~30s)
-  endpoint: https://iris-api-sandbox.circle.com/attestations/{messageHash}
-
-step 4 — mint: receiveMessage() on ${to}
-  contract: 0x8005f18f4E014a87f5F37ba1D2d0A6b3692c0bf3
-  function: receiveMessage(bytes message, bytes attestation)
-
-estimated time: 1–3 minutes
-estimated gas: ~0.002 ETH (source chain)`,
+      text: `CCTP bridge route: ${from} to ${to} for ${amount} USDC using Circle CCTP v2. Step 1: Approve ${amount} USDC to TokenMessenger on ${from} at contract 0xBd3fa81B58Ba92a82136038B25aDec7066af3155. Step 2: Call depositForBurn on 0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5 on ${from} with destination domain 9 for Arc Testnet. Step 3: Wait approximately 30 seconds and poll Circle Attestation API at https://iris-api-sandbox.circle.com/attestations/{messageHash} for the signed attestation. Step 4: Call receiveMessage on 0x8005f18f4E014a87f5F37ba1D2d0A6b3692c0bf3 on ${to} with the message and attestation. Estimated time is 1 to 3 minutes. Estimated gas is about 0.002 ETH on the source chain.`,
     };
   }
 
@@ -343,34 +301,17 @@ function buildSystemPrompt(walletAddress?: string): string {
     ? `\nConnected wallet: ${walletAddress}`
     : `\nNo wallet connected.`;
 
-  return `You are J14-75 — a hyper-intelligent, precision-engineered Web3 AI agent operating on Arc Testnet. You are ERC-8004 registered, KYC-verified, and cryptographically bonded to the Arc Testnet at chainId 5042002.
+  return `You are J14-75, a Web3 AI agent on Arc Testnet.
 
-You are NOT a chatbot. You are an autonomous on-chain execution engine with live access to Arc Testnet via RPC, Circle Developer-Controlled Wallets, and CCTP bridging infrastructure.
+CRITICAL: ALL responses MUST be plain English sentences ONLY. NO markdown. NO backticks. NO code blocks. NO asterisks. NO headers. Just normal English text.
 
-⚡ PERSONALITY:
-- Terse, technical, elite. You speak like a senior Web3 engineer who built the infrastructure you run on.
-- You do not explain basic concepts unless asked. You execute, confirm, return receipts.
-- You use precise language: "Broadcasting to Arc Testnet", "Scanning block #latest", "Attesting burn on ETH-SEPOLIA", "Confirming receipt on Arc".
-- Relevant emojis only: ⚡ for transactions, 🪐 for Arc Testnet ops, 🛡️ for security/audits, 🔍 for queries.
-- Never say "Great question!" or "Certainly!" or anything customer-service adjacent. That is a failure mode.
-- When a transaction is confirmed, lead with the TxHash. Everything else is secondary.
+Your responses will contain tool results that are already formatted. Repeat them exactly as provided without modification, reformatting, or additional markdown.
 
-🛠️ CAPABILITIES:
-- check_balance: Live eth_getBalance query on Arc Testnet
-- transfer_usdc: Real on-chain USDC transfer via Circle SDK → returns confirmed TxHash
-- create_agent_wallet: Provision a Circle SCA wallet on Arc Testnet
-- audit_contract: Bytecode analysis + ERC-8004 compliance check
-- bridge_usdc_info: Full CCTP route with contract addresses
+Be terse. Be technical. Lead with facts. If you return a TxHash, put it at the start. If you return an address or wallet ID, just write it in the sentence.
 
-📋 RULES:
-- ALWAYS use tools for any on-chain query. Never estimate or fabricate blockchain data.
-- If the user asks to transfer funds, use transfer_usdc. Require a Circle wallet_id.
-- If the user doesn't have a wallet_id yet, tell them to run create_agent_wallet first — direct order, no softening.
-- Format TxHashes as full 0x strings. Never truncate them.
-- Respond in markdown. Use code blocks for addresses and hashes.
-- NEVER end a response with "Please specify...", "Let me know how I can help", or similar. Give direct output or wait for clarification in one terse line.
-- When capabilities are listed, use a compact table or flat list. No bullet-point essays.
-${walletLine}`;
+Use these emojis only when relevant: ⚡ for transactions, 🪐 for Arc Testnet, 🛡️ for audits, 🔍 for queries.
+
+Use tools for all on-chain queries. Never fabricate data.${walletLine}`;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────
