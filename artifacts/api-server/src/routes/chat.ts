@@ -9,8 +9,31 @@ const MODEL = "llama-3.3-70b-versatile";
 const ARC_RPC = "https://rpc.testnet.arc.network";
 const ARC_EXPLORER = "https://explorer.testnet.arc.network";
 
-// ── Circle SDK client ─────────────────────────────────────────────────────
+// ── Token registry (predefined tokens only — fetching all tokens requires an indexer API) ──
+// NOTE: Fetching the full token list of a wallet requires an indexer API
+// (e.g. Alchemy, Moralis, or Arc Testnet Explorer API) which is not available here.
+// Only these predefined tokens are supported for on-chain reads.
+const PREDEFINED_TOKENS: Record<string, { address: string; decimals: number; action: "transfer_native" | "transfer_erc20" }> = {
+  USDC: { address: "native", decimals: 18, action: "transfer_native" },
+  // EURC contract address on Arc Testnet — set ARC_EURC_ADDRESS env var if deployed
+  EURC: {
+    address: process.env.ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED_ON_ARC_TESTNET",
+    decimals: 6,
+    action: "transfer_erc20",
+  },
+};
 
+// ── ExecutionPlan — returned to frontend for real wallet execution ─────────
+export interface ExecutionPlan {
+  action: "transfer_native" | "transfer_erc20";
+  token: string;
+  tokenAddress: string;
+  decimals: number;
+  recipient: string;
+  amount: string;
+}
+
+// ── Circle SDK client ─────────────────────────────────────────────────────
 function getCircleClient() {
   const apiKey = process.env.CIRCLE_API_KEY;
   const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
@@ -19,7 +42,6 @@ function getCircleClient() {
 }
 
 // ── Arc Testnet RPC helpers ───────────────────────────────────────────────
-
 async function rpcCall(method: string, params: any[], id = 1): Promise<any> {
   const res = await fetch(ARC_RPC, {
     method: "POST",
@@ -31,9 +53,17 @@ async function rpcCall(method: string, params: any[], id = 1): Promise<any> {
   return json.result;
 }
 
-async function fetchBalance(address: string): Promise<string> {
+async function fetchNativeBalance(address: string): Promise<string> {
   const hex = await rpcCall("eth_getBalance", [address, "latest"]);
   return (Number(BigInt(hex)) / 1e18).toFixed(6);
+}
+
+async function fetchErc20Balance(tokenAddress: string, walletAddress: string, decimals: number): Promise<string> {
+  // balanceOf(address) selector = 0x70a08231
+  const data = "0x70a08231" + walletAddress.slice(2).padStart(64, "0");
+  const hex = await rpcCall("eth_call", [{ to: tokenAddress, data }, "latest"]);
+  if (!hex || hex === "0x") return "0.000000";
+  return (Number(BigInt(hex)) / Math.pow(10, decimals)).toFixed(6);
 }
 
 async function fetchTxCount(address: string): Promise<number> {
@@ -45,39 +75,13 @@ async function fetchBytecode(address: string): Promise<string> {
   return (await rpcCall("eth_getCode", [address, "latest"])) ?? "0x";
 }
 
-async function pollTxReceipt(txHash: string, maxMs = 60_000): Promise<any> {
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const receipt = await rpcCall("eth_getTransactionReceipt", [txHash]);
-    if (receipt) return receipt;
-    await new Promise((r) => setTimeout(r, 2500));
-  }
-  throw new Error("Transaction receipt timed out after 60s");
-}
-
-// ── Circle transaction helpers ────────────────────────────────────────────
-
-async function pollCircleTx(client: any, txId: string, maxMs = 90_000): Promise<{ txHash: string; status: string }> {
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const resp = await client.getTransaction({ id: txId });
-    const tx = (resp as any)?.data?.transaction;
-    if (!tx) throw new Error("Circle: transaction not found");
-    if (tx.state === "CONFIRMED" && tx.txHash) return { txHash: tx.txHash, status: "CONFIRMED" };
-    if (tx.state === "FAILED") throw new Error("Circle: transaction failed on-chain");
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  throw new Error("Circle transaction timed out");
-}
-
 // ── Groq Tool Definitions ─────────────────────────────────────────────────
-
 const TOOLS: Groq.Chat.CompletionCreateParams.Tool[] = [
   {
     type: "function",
     function: {
       name: "check_balance",
-      description: "Query the real on-chain USDC balance of a wallet address on Arc Testnet. Invoke when user asks about funds, balance, or holdings.",
+      description: "Query the real on-chain USDC (native) balance of a wallet address on Arc Testnet. Invoke when user asks about funds, balance, or holdings.",
       parameters: {
         type: "object",
         properties: {
@@ -93,25 +97,43 @@ const TOOLS: Groq.Chat.CompletionCreateParams.Tool[] = [
   {
     type: "function",
     function: {
-      name: "transfer_usdc",
-      description: "Execute a real USDC transfer on Arc Testnet using a Circle Developer-Controlled wallet. Broadcasts the transaction on-chain and returns the TxHash.",
+      name: "get_token_balances",
+      description: "Get the on-chain balances of predefined tokens (USDC native, EURC ERC-20) for a wallet on Arc Testnet. NOTE: fetching ALL tokens requires an indexer API which is not available — only predefined tokens are supported.",
       parameters: {
         type: "object",
         properties: {
-          wallet_id: {
+          address: {
             type: "string",
-            description: "The Circle-controlled wallet ID to send from. Required.",
+            description: "0x wallet address to check.",
+          },
+        },
+        required: ["address"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "plan_transfer",
+      description: "Create an execution plan for transferring USDC or EURC tokens on Arc Testnet. The FRONTEND will validate the real on-chain balance and execute the actual transaction using the user's connected wallet. Do NOT assume the transfer has happened — it requires user wallet confirmation.",
+      parameters: {
+        type: "object",
+        properties: {
+          token: {
+            type: "string",
+            enum: ["USDC", "EURC"],
+            description: "Token to transfer. USDC is the native token (18 decimals). EURC is ERC-20 (6 decimals).",
           },
           recipient: {
             type: "string",
-            description: "Destination 0x address on Arc Testnet.",
+            description: "Recipient 0x address on Arc Testnet.",
           },
           amount: {
             type: "string",
-            description: "Amount of USDC to send (e.g. '10', '100.5').",
+            description: "Amount as a decimal string, e.g. '10', '100.5'.",
           },
         },
-        required: ["wallet_id", "recipient", "amount"],
+        required: ["token", "recipient", "amount"],
       },
     },
   },
@@ -136,7 +158,7 @@ const TOOLS: Groq.Chat.CompletionCreateParams.Tool[] = [
     type: "function",
     function: {
       name: "audit_contract",
-      description: "Perform an on-chain security audit of a smart contract on Arc Testnet. Fetches bytecode and on-chain metrics.",
+      description: "Perform an on-chain security audit of a smart contract on Arc Testnet. Fetches real bytecode and on-chain metrics.",
       parameters: {
         type: "object",
         properties: {
@@ -168,10 +190,10 @@ const TOOLS: Groq.Chat.CompletionCreateParams.Tool[] = [
 ];
 
 // ── Tool Execution ────────────────────────────────────────────────────────
-
 interface ToolResult {
   text: string;
   txHash?: string;
+  plan?: ExecutionPlan;
 }
 
 async function executeTool(
@@ -185,54 +207,78 @@ async function executeTool(
     const addr = args.address || walletAddress;
     if (!addr) return { text: "No wallet address available. Connect your wallet first." };
     try {
-      const balance = await fetchBalance(addr);
+      const balance = await fetchNativeBalance(addr);
       return {
-        text: `Wallet ${addr} on Arc Testnet has a balance of ${balance} USDC. Block latest.`,
+        text: `On-chain USDC (native) balance for ${addr} on Arc Testnet: ${balance} USDC. This is a real RPC read from block latest.`,
       };
-    } catch {
-      return { text: `RPC query failed for ${addr}. Arc Testnet may be temporarily unreachable.` };
+    } catch (err: any) {
+      return { text: `RPC query failed for ${addr}: ${err?.message ?? "Arc Testnet may be temporarily unreachable."}` };
     }
   }
 
-  // ── transfer_usdc ──
-  if (name === "transfer_usdc") {
-    const { wallet_id, recipient, amount } = args;
-    if (!wallet_id || !recipient || !amount) {
-      return {
-        text: `Missing parameters. Need: wallet_id (Circle wallet), recipient (0x address), amount (USDC). Use create_agent_wallet to provision a Circle-controlled wallet first.`,
-      };
-    }
+  // ── get_token_balances ──
+  if (name === "get_token_balances") {
+    const addr = args.address || walletAddress;
+    if (!addr) return { text: "No wallet address available. Connect your wallet first." };
+
+    const results: string[] = [];
+
+    // USDC (native)
     try {
-      const client = getCircleClient();
-
-      // Initiate transaction via Circle
-      const txResp: any = await client.createTransaction({
-        walletId: wallet_id,
-        amounts: [String(amount)],
-        destinationAddress: recipient,
-        fee: { type: "estimated" },
-        blockchain: "ARC-TESTNET",
-      } as any);
-
-      const circleId = txResp?.data?.id ?? txResp?.data?.transaction?.id;
-      if (!circleId) throw new Error("Circle did not return a transaction ID");
-
-      // Poll Circle for txHash
-      const { txHash } = await pollCircleTx(client, circleId);
-
-      // Confirm receipt on-chain
-      const receipt = await pollTxReceipt(txHash);
-      const confirmed = receipt?.status === "0x1" || receipt?.status === 1;
-
-      const balanceAfter = await fetchBalance(walletAddress || recipient).catch(() => "N/A");
-
-      return {
-        text: `Transaction confirmed on Arc Testnet. TxHash: ${txHash}. Sent ${amount} USDC from Circle wallet to ${recipient}. Block ${parseInt(receipt?.blockNumber ?? "0x0", 16)}. Status: ${confirmed ? "SUCCESS" : "REVERTED"}. Balance after: ${balanceAfter} USDC.`,
-        txHash,
-      };
-    } catch (err: any) {
-      return { text: `Transaction failed: ${err?.message ?? String(err)}` };
+      const usdcBalance = await fetchNativeBalance(addr);
+      results.push(`USDC (native): ${usdcBalance}`);
+    } catch {
+      results.push("USDC (native): RPC unavailable");
     }
+
+    // EURC (ERC-20)
+    const eurcToken = PREDEFINED_TOKENS.EURC;
+    if (!eurcToken.address.startsWith("EURC_NOT")) {
+      try {
+        const eurcBalance = await fetchErc20Balance(eurcToken.address, addr, eurcToken.decimals);
+        results.push(`EURC (ERC-20 at ${eurcToken.address}): ${eurcBalance}`);
+      } catch {
+        results.push("EURC (ERC-20): RPC unavailable");
+      }
+    } else {
+      results.push("EURC (ERC-20): contract not deployed on Arc Testnet or ARC_EURC_ADDRESS env var not set");
+    }
+
+    return {
+      text: `Token balances for ${addr} on Arc Testnet. ${results.join(". ")}. IMPORTANT: Only predefined tokens are shown. Fetching all tokens requires an indexer API (e.g. Alchemy or Arc Testnet Explorer API) which is not configured.`,
+    };
+  }
+
+  // ── plan_transfer ──
+  // Creates an execution plan for the FRONTEND to execute via the user's wallet.
+  // This does NOT execute the transaction — the frontend validates balance and signs.
+  if (name === "plan_transfer") {
+    const { token, recipient, amount } = args;
+    if (!token || !recipient || !amount) {
+      return { text: "Missing parameters for transfer plan. Need token (USDC or EURC), recipient address, and amount." };
+    }
+
+    const tokenInfo = PREDEFINED_TOKENS[token as string];
+    if (!tokenInfo) {
+      return { text: `Unsupported token: ${token}. Only USDC and EURC are supported on Arc Testnet.` };
+    }
+    if (tokenInfo.action === "transfer_erc20" && tokenInfo.address.startsWith("EURC_NOT")) {
+      return { text: `EURC transfer is not available: the EURC contract has not been deployed on Arc Testnet. Only USDC transfers are supported.` };
+    }
+
+    const plan: ExecutionPlan = {
+      action: tokenInfo.action,
+      token,
+      tokenAddress: tokenInfo.address,
+      decimals: tokenInfo.decimals,
+      recipient,
+      amount,
+    };
+
+    return {
+      text: `Transfer plan ready: send ${amount} ${token} to ${recipient} on Arc Testnet. The balance will be validated on-chain and your wallet will be prompted to sign the transaction.`,
+      plan,
+    };
   }
 
   // ── create_agent_wallet ──
@@ -287,7 +333,7 @@ async function executeTool(
     const from = args.from_chain ?? "ETH-SEPOLIA";
     const to = args.to_chain ?? "ARC-TESTNET";
     return {
-      text: `CCTP bridge route: ${from} to ${to} for ${amount} USDC using Circle CCTP v2. Step 1: Approve ${amount} USDC to TokenMessenger on ${from} at contract 0xBd3fa81B58Ba92a82136038B25aDec7066af3155. Step 2: Call depositForBurn on 0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5 on ${from} with destination domain 9 for Arc Testnet. Step 3: Wait approximately 30 seconds and poll Circle Attestation API at https://iris-api-sandbox.circle.com/attestations/{messageHash} for the signed attestation. Step 4: Call receiveMessage on 0x8005f18f4E014a87f5F37ba1D2d0A6b3692c0bf3 on ${to} with the message and attestation. Estimated time is 1 to 3 minutes. Estimated gas is about 0.002 ETH on the source chain.`,
+      text: `CCTP bridge route: ${from} to ${to} for ${amount} USDC using Circle CCTP v2. Step 1: Approve ${amount} USDC to TokenMessenger on ${from} at contract 0xBd3fa81B58Ba92a82136038B25aDec7066af3155. Step 2: Call depositForBurn on 0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5 on ${from} with destination domain 9 for Arc Testnet. Step 3: Wait approximately 30 seconds and poll Circle Attestation API at https://iris-api-sandbox.circle.com/attestations/{messageHash} for the signed attestation. Step 4: Call receiveMessage on 0x8005f18f4E014a87f5F37ba1D2d0A6b3692c0bf3 on ${to} with the message and attestation. Estimated time is 1 to 3 minutes.`,
     };
   }
 
@@ -295,27 +341,28 @@ async function executeTool(
 }
 
 // ── System Prompt ─────────────────────────────────────────────────────────
-
 function buildSystemPrompt(walletAddress?: string): string {
   const walletLine = walletAddress
     ? `\nConnected wallet: ${walletAddress}`
     : `\nNo wallet connected.`;
 
-  return `You are J14-75, a Web3 AI agent on Arc Testnet.
+  return `You are J14-75, a Web3 AI agent on Arc Testnet. You parse user intent and return real on-chain data using tools.
 
-CRITICAL: ALL responses MUST be plain English sentences ONLY. NO markdown. NO backticks. NO code blocks. NO asterisks. NO headers. Just normal English text.
+ABSOLUTE RULES — NEVER BREAK THESE:
+1. NEVER generate fake transaction hashes, block numbers, or simulate balances. You have zero access to real blockchain state outside your tools. Any data you invent will be wrong and will break the user's trust.
+2. NEVER assume a transfer or transaction was successful. When the user wants to transfer tokens, use plan_transfer to create an execution plan. The frontend validates the real on-chain balance and prompts the user's wallet (MetaMask) to sign. You will NOT see the result — do not fabricate one.
+3. NEVER say "transaction confirmed", "transferred successfully", or include a TxHash unless you received one from a tool. The only TxHash that matters is one returned by the actual blockchain after mining.
+4. When a user asks to see "all tokens" or "all holdings", only check USDC (native) and EURC (ERC-20) via get_token_balances. Fetching all tokens requires an indexer API like Alchemy or Arc Explorer API — state this limitation explicitly.
+5. Your job is to: parse intent, call the right tool, and relay the real tool result. Nothing else.
 
-Your responses will contain tool results that are already formatted. Repeat them exactly as provided without modification, reformatting, or additional markdown.
-
-Be terse. Be technical. Lead with facts. If you return a TxHash, put it at the start. If you return an address or wallet ID, just write it in the sentence.
-
-Use these emojis only when relevant: ⚡ for transactions, 🪐 for Arc Testnet, 🛡️ for audits, 🔍 for queries.
-
-Use tools for all on-chain queries. Never fabricate data.${walletLine}`;
+RESPONSE RULES:
+- Plain English sentences ONLY. No markdown. No backticks. No code blocks. No asterisks. No headers.
+- Be terse and technical. Lead with facts from tool results. Never pad responses.
+- Use emojis only when relevant: ⚡ for transactions, 🪐 for Arc Testnet, 🛡️ for audits, 🔍 for queries.
+- If a transfer plan was created, explain that the user needs to confirm and sign it in their wallet.${walletLine}`;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────
-
 router.post("/", async (req, res) => {
   const { message, walletAddress, history = [] } = req.body as {
     message: string;
@@ -340,6 +387,7 @@ router.post("/", async (req, res) => {
   try {
     let toolUsed: string | undefined;
     let txHash: string | undefined;
+    let plan: ExecutionPlan | undefined;
 
     const first = await groq.chat.completions.create({
       model: MODEL,
@@ -356,6 +404,7 @@ router.post("/", async (req, res) => {
       const args = JSON.parse(call.function.arguments || "{}");
       const toolResult = await executeTool(call.function.name, args, walletAddress);
       txHash = toolResult.txHash;
+      plan = toolResult.plan;
 
       const second = await groq.chat.completions.create({
         model: MODEL,
@@ -375,7 +424,7 @@ router.post("/", async (req, res) => {
       });
 
       const reply = second.choices[0]?.message?.content ?? "No response.";
-      res.json({ reply, toolUsed, txHash });
+      res.json({ reply, toolUsed, txHash, plan });
     } else {
       const reply = choice.message.content ?? "No response.";
       res.json({ reply, toolUsed });

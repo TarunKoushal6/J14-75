@@ -5,21 +5,147 @@ import {
   Zap, Shield, Activity, Wallet, ArrowRightLeft, Search,
   Send, Copy, Check, ExternalLink, AlertTriangle,
   BarChart3, Lock, Globe, Cpu, ArrowLeft, ChevronDown, ChevronUp,
-  X
+  X, CheckCircle, Loader2,
 } from "lucide-react";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  custom,
+  parseUnits,
+  formatUnits,
+  erc20Abi,
+} from "viem";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";
-const ARC_CHAIN_ID = "0x4CEF52"; // 5042002
+const ARC_CHAIN_ID_HEX = "0x4CEF52"; // 5042002
+const ARC_CHAIN_ID_NUM = 5042002;
 const REPUTATION_REGISTRY = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
-const AGENT_ID_HEX = "000000000000000000000000000000000000000000000000000000000000004b"; // 75
+const AGENT_ID_HEX = "000000000000000000000000000000000000000000000000000000000000004b";
 
+// ── Arc Testnet chain definition for viem ─────────────────────────────────
+const arcTestnet = {
+  id: ARC_CHAIN_ID_NUM,
+  name: "Arc Testnet",
+  network: "arc-testnet",
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  rpcUrls: {
+    default: { http: [ARC_TESTNET_RPC] },
+    public: { http: [ARC_TESTNET_RPC] },
+  },
+  blockExplorers: {
+    default: { name: "Arc Explorer", url: "https://explorer.testnet.arc.network" },
+  },
+} as const;
+
+// ── Predefined tokens for Arc Testnet ─────────────────────────────────────
+// NOTE: Fetching all wallet tokens requires an indexer API (Alchemy / Arc Explorer API).
+// Only predefined tokens below are supported for on-chain balance reads.
+const PREDEFINED_TOKENS: Record<string, { address: string; decimals: number; isNative: boolean }> = {
+  USDC: { address: "native", decimals: 18, isNative: true },
+  EURC: {
+    address: import.meta.env.VITE_ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED",
+    decimals: 6,
+    isNative: false,
+  },
+  ETH: { address: "native_eth", decimals: 18, isNative: true },
+};
+
+// ── viem client factories ─────────────────────────────────────────────────
+function getPublicClient() {
+  return createPublicClient({ chain: arcTestnet, transport: http(ARC_TESTNET_RPC) });
+}
+
+function getWalletClient() {
+  const eth = (window as any).ethereum;
+  if (!eth) throw new Error("No Web3 wallet found. Install MetaMask or Rabby.");
+  return createWalletClient({ chain: arcTestnet, transport: custom(eth) });
+}
+
+// ── ExecutionPlan (must match backend interface) ───────────────────────────
+interface ExecutionPlan {
+  action: "transfer_native" | "transfer_erc20";
+  token: string;
+  tokenAddress: string;
+  decimals: number;
+  recipient: string;
+  amount: string;
+}
+
+// ── Real on-chain balance validation (viem) ───────────────────────────────
+async function validatePlan(plan: ExecutionPlan, walletAddress: string): Promise<void> {
+  const publicClient = getPublicClient();
+  const userAddr = walletAddress as `0x${string}`;
+
+  if (plan.action === "transfer_native") {
+    // USDC is native on Arc Testnet — use getBalance
+    const balance = await publicClient.getBalance({ address: userAddr });
+    const required = parseUnits(plan.amount, plan.decimals);
+    if (balance < required) {
+      throw new Error(
+        `Insufficient ${plan.token} balance. You have ${formatUnits(balance, plan.decimals)} ${plan.token} but need ${plan.amount} ${plan.token}.`
+      );
+    }
+  } else if (plan.action === "transfer_erc20") {
+    // ERC-20 token — use readContract with standard ERC-20 ABI
+    const balance = await publicClient.readContract({
+      address: plan.tokenAddress as `0x${string}`,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [userAddr],
+    }) as bigint;
+    const required = parseUnits(plan.amount, plan.decimals);
+    if (balance < required) {
+      throw new Error(
+        `Insufficient ${plan.token} balance. You have ${formatUnits(balance, plan.decimals)} ${plan.token} but need ${plan.amount} ${plan.token}.`
+      );
+    }
+  }
+}
+
+// ── Real on-chain execution (viem walletClient + receipt polling) ──────────
+async function executePlan(plan: ExecutionPlan, walletAddress: string): Promise<`0x${string}`> {
+  const walletClient = getWalletClient();
+  const publicClient = getPublicClient();
+  const account = walletAddress as `0x${string}`;
+
+  let hash: `0x${string}`;
+
+  if (plan.action === "transfer_native") {
+    // Send native USDC on Arc Testnet
+    hash = await walletClient.sendTransaction({
+      account,
+      to: plan.recipient as `0x${string}`,
+      value: parseUnits(plan.amount, plan.decimals),
+      chain: arcTestnet,
+    });
+  } else if (plan.action === "transfer_erc20") {
+    // Transfer ERC-20 token (e.g. EURC)
+    hash = await walletClient.writeContract({
+      account,
+      address: plan.tokenAddress as `0x${string}`,
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [plan.recipient as `0x${string}`, parseUnits(plan.amount, plan.decimals)],
+      chain: arcTestnet,
+    });
+  } else {
+    throw new Error(`Unsupported plan action: ${(plan as any).action}`);
+  }
+
+  // Wait for real transaction receipt from Arc Testnet RPC
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  if (receipt.status !== "success") {
+    throw new Error(`Transaction was reverted on-chain. TxHash: ${hash}`);
+  }
+
+  return hash;
+}
+
+// ── Selector probes for reputation score ──────────────────────────────────
 const SCORE_SELECTORS: string[] = [
-  "0x0e1af57b", // getScore(uint256)
-  "0x89370d8b", // getReputation(uint256)
-  "0x56c708d5", // reputation(uint256)
-  "0x2ee691a3", // scores(uint256)
-  "0x925469dc", // getAgentScore(uint256)
+  "0x0e1af57b", "0x89370d8b", "0x56c708d5", "0x2ee691a3", "0x925469dc",
 ];
 
 function getQuickActions(walletAddress?: string) {
@@ -30,6 +156,13 @@ function getQuickActions(walletAddress?: string) {
       prompt: walletAddress
         ? `Check the balance of my wallet ${walletAddress} on Arc Testnet`
         : "What is my balance on Arc Testnet?",
+    },
+    {
+      label: "All tokens",
+      icon: BarChart3,
+      prompt: walletAddress
+        ? `Show all token balances for ${walletAddress}`
+        : "Show my token balances on Arc Testnet",
     },
     {
       label: "Bridge USDC",
@@ -46,11 +179,14 @@ function getQuickActions(walletAddress?: string) {
 
 const CAPABILITIES = [
   { icon: Wallet, label: "Wallet Mgmt", desc: "SCA wallets on Circle infra" },
-  { icon: BarChart3, label: "Balance Check", desc: "ETH + USDC on-chain" },
+  { icon: BarChart3, label: "Balance Check", desc: "USDC + EURC on-chain" },
   { icon: ArrowRightLeft, label: "CCTP Bridge", desc: "Cross-chain USDC transfer" },
   { icon: Search, label: "Contract Audit", desc: "Security risk scoring" },
   { icon: Shield, label: "KYC Verified", desc: "ERC-8004 validated" },
 ];
+
+// ── Types ──────────────────────────────────────────────────────────────────
+type PlanStatus = "pending" | "executing" | "success" | "error" | "cancelled";
 
 interface Message {
   id: string;
@@ -60,6 +196,8 @@ interface Message {
   toolUsed?: string;
   txHash?: string;
   isStatus?: boolean;
+  plan?: ExecutionPlan;
+  planStatus?: PlanStatus;
 }
 
 interface WalletState {
@@ -94,13 +232,8 @@ async function fetchReputationScore(): Promise<number> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "eth_call",
-          params: [
-            { to: REPUTATION_REGISTRY, data: selector + AGENT_ID_HEX },
-            "latest",
-          ],
+          jsonrpc: "2.0", id: 1, method: "eth_call",
+          params: [{ to: REPUTATION_REGISTRY, data: selector + AGENT_ID_HEX }, "latest"],
         }),
       });
       const json = await res.json();
@@ -109,11 +242,9 @@ async function fetchReputationScore(): Promise<number> {
         const value = parseInt(result, 16);
         if (value > 0 && value <= 100) return value;
       }
-    } catch {
-      // try next selector
-    }
+    } catch { /* try next selector */ }
   }
-  return 95; // known on-chain value fallback
+  return 95;
 }
 
 // ── Score ring ─────────────────────────────────────────────────────────────
@@ -126,8 +257,7 @@ function ScoreRing({ value, size = 56, color = "#FF6B00" }: { value: number; siz
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={4} />
       <motion.circle
         cx={size / 2} cy={size / 2} r={r} fill="none"
-        stroke={color} strokeWidth={4}
-        strokeDasharray={circ}
+        stroke={color} strokeWidth={4} strokeDasharray={circ}
         initial={{ strokeDashoffset: circ }}
         animate={{ strokeDashoffset: circ - dash }}
         transition={{ duration: 1.2, ease: "easeOut", delay: 0.3 }}
@@ -137,7 +267,7 @@ function ScoreRing({ value, size = 56, color = "#FF6B00" }: { value: number; siz
   );
 }
 
-// ── Welcome message & backend AI ───────────────────────────────────────────
+// ── Welcome message ─────────────────────────────────────────────────────────
 const WELCOME_MESSAGE: Message = {
   id: "welcome",
   role: "agent",
@@ -148,10 +278,10 @@ const WELCOME_MESSAGE: Message = {
 function getStatusText(content: string): string {
   const lc = content.toLowerCase();
   if (lc.includes("transfer") || lc.includes("send") || lc.includes("pay"))
-    return "⚡ Broadcasting transaction to Arc Testnet...";
+    return "⚡ Parsing transfer intent...";
   if (lc.includes("bridge") || lc.includes("cctp"))
     return "⚡ Mapping CCTP bridge route...";
-  if (lc.includes("balance") || lc.includes("fund") || lc.includes("how much"))
+  if (lc.includes("balance") || lc.includes("fund") || lc.includes("how much") || lc.includes("token"))
     return "🔍 Scanning Arc Testnet block #latest...";
   if (lc.includes("audit") || lc.includes("contract") || lc.includes("safe"))
     return "🛡️ Running on-chain contract analysis...";
@@ -160,11 +290,12 @@ function getStatusText(content: string): string {
   return "🪐 J14-75 processing...";
 }
 
+// ── Backend chat call ──────────────────────────────────────────────────────
 async function callBackendChat(
   message: string,
   walletAddress?: string,
   history?: Array<{ role: "user" | "agent"; content: string }>
-): Promise<{ reply: string; toolUsed?: string; txHash?: string }> {
+): Promise<{ reply: string; toolUsed?: string; txHash?: string; plan?: ExecutionPlan }> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -177,7 +308,123 @@ async function callBackendChat(
   return res.json();
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────
+// ── Plan Confirmation Card ─────────────────────────────────────────────────
+function PlanConfirmCard({
+  messageId, plan, planStatus,
+  onConfirm, onCancel,
+}: {
+  messageId: string;
+  plan: ExecutionPlan;
+  planStatus: PlanStatus;
+  onConfirm: (messageId: string, plan: ExecutionPlan) => void;
+  onCancel: (messageId: string) => void;
+}) {
+  const isExecuting = planStatus === "executing";
+  const isSuccess = planStatus === "success";
+  const isError = planStatus === "error";
+  const isCancelled = planStatus === "cancelled";
+  const isDone = isSuccess || isError || isCancelled;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+      className="mt-2.5 rounded-xl overflow-hidden"
+      style={{ border: "1px solid rgba(255,107,0,0.25)", background: "rgba(255,107,0,0.05)" }}
+    >
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2"
+        style={{ borderBottom: "1px solid rgba(255,107,0,0.15)", background: "rgba(255,107,0,0.08)" }}>
+        <Zap size={11} style={{ color: "#FF6B00" }} />
+        <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "#FF6B00" }}>
+          Transfer Request
+        </span>
+        {isExecuting && (
+          <motion.span animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+            className="ml-auto">
+            <Loader2 size={12} style={{ color: "#FF6B00" }} />
+          </motion.span>
+        )}
+        {isSuccess && <CheckCircle size={12} className="ml-auto text-green-400" />}
+        {isError && <AlertTriangle size={12} className="ml-auto text-red-400" />}
+        {isCancelled && <X size={12} className="ml-auto opacity-40" />}
+      </div>
+
+      {/* Details */}
+      <div className="px-3 py-2.5 flex flex-col gap-1.5">
+        {[
+          { label: "Token", value: plan.token },
+          { label: "Amount", value: `${plan.amount} ${plan.token}` },
+          { label: "To", value: truncateAddress(plan.recipient) },
+          { label: "Network", value: "Arc Testnet" },
+          { label: "Type", value: plan.action === "transfer_native" ? "Native transfer" : "ERC-20 transfer" },
+        ].map(({ label, value }) => (
+          <div key={label} className="flex items-center justify-between">
+            <span className="text-[10px]" style={{ color: "rgba(255,255,255,0.3)" }}>{label}</span>
+            <span className="text-[11px] font-mono font-medium" style={{ color: "rgba(255,255,255,0.75)" }}>{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Action buttons */}
+      {planStatus === "pending" && (
+        <div className="flex gap-2 px-3 pb-3">
+          <button
+            onClick={() => onCancel(messageId)}
+            className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)" }}>
+            Cancel
+          </button>
+          <motion.button
+            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+            onClick={() => onConfirm(messageId, plan)}
+            className="flex-[2] py-1.5 rounded-lg text-[11px] font-semibold text-black flex items-center justify-center gap-1.5"
+            style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>
+            <Zap size={11} />
+            Sign & Execute
+          </motion.button>
+        </div>
+      )}
+
+      {isExecuting && (
+        <div className="px-3 pb-3">
+          <div className="py-1.5 rounded-lg text-[11px] font-semibold text-center"
+            style={{ background: "rgba(255,107,0,0.1)", border: "1px solid rgba(255,107,0,0.2)", color: "#FF6B00" }}>
+            Waiting for wallet signature...
+          </div>
+        </div>
+      )}
+
+      {isSuccess && (
+        <div className="px-3 pb-3">
+          <div className="py-1.5 rounded-lg text-[11px] font-semibold text-center"
+            style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#22c55e" }}>
+            ✓ Transaction confirmed on Arc Testnet
+          </div>
+        </div>
+      )}
+
+      {isError && (
+        <div className="px-3 pb-3">
+          <div className="py-1.5 rounded-lg text-[11px] font-semibold text-center"
+            style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}>
+            Transaction failed — see chat for details
+          </div>
+        </div>
+      )}
+
+      {isCancelled && (
+        <div className="px-3 pb-3">
+          <div className="py-1.5 rounded-lg text-[11px] text-center"
+            style={{ color: "rgba(255,255,255,0.3)" }}>
+            Cancelled
+          </div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ── Typing indicator ───────────────────────────────────────────────────────
 function TypingIndicator({ statusText }: { statusText?: string }) {
   return (
     <motion.div
@@ -205,7 +452,16 @@ function TypingIndicator({ statusText }: { statusText?: string }) {
   );
 }
 
-function ChatMessage({ message }: { message: Message }) {
+// ── Chat Message ───────────────────────────────────────────────────────────
+function ChatMessage({
+  message,
+  onConfirmPlan,
+  onCancelPlan,
+}: {
+  message: Message;
+  onConfirmPlan: (messageId: string, plan: ExecutionPlan) => void;
+  onCancelPlan: (messageId: string) => void;
+}) {
   const isAgent = message.role === "agent";
   return (
     <motion.div
@@ -229,6 +485,19 @@ function ChatMessage({ message }: { message: Message }) {
           style={{ color: isAgent ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.9)" }}>
           {message.content}
         </p>
+
+        {/* Plan confirmation card */}
+        {message.plan && message.planStatus && (
+          <PlanConfirmCard
+            messageId={message.id}
+            plan={message.plan}
+            planStatus={message.planStatus}
+            onConfirm={onConfirmPlan}
+            onCancel={onCancelPlan}
+          />
+        )}
+
+        {/* TxHash badge */}
         {message.txHash && (
           <a
             href={`https://explorer.testnet.arc.network/tx/${message.txHash}`}
@@ -244,6 +513,7 @@ function ChatMessage({ message }: { message: Message }) {
             <span className="text-[10px]" style={{ color: "rgba(255,107,0,0.7)" }}>Arc Explorer</span>
           </a>
         )}
+
         <div className="flex items-center justify-between mt-1.5 gap-2">
           <span className="text-[10px] shrink-0" style={{ color: "rgba(255,255,255,0.25)" }}>
             {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -260,7 +530,7 @@ function ChatMessage({ message }: { message: Message }) {
   );
 }
 
-// ── Sidebar content (shared between mobile collapsed + desktop) ────────────
+// ── Sidebar content ────────────────────────────────────────────────────────
 function SidebarContent({
   wallet, reputationScore, scoreLoading,
 }: {
@@ -270,7 +540,6 @@ function SidebarContent({
 }) {
   return (
     <>
-      {/* Agent avatar + name */}
       <div className="flex flex-col items-center gap-2 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
         <div className="relative">
           <motion.div
@@ -281,8 +550,7 @@ function SidebarContent({
             <img src="/logo.png" alt="J14-75" className="w-full h-full object-contain" />
           </motion.div>
           <span className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full"
-            style={{ background: "#22c55e", border: "2px solid #000",
-              animation: "pulse-agent 2s ease-in-out infinite" }} />
+            style={{ background: "#22c55e", border: "2px solid #000", animation: "pulse-agent 2s ease-in-out infinite" }} />
         </div>
         <div className="text-center">
           <div className="font-bold text-sm tracking-wide text-white">J14-75</div>
@@ -290,7 +558,6 @@ function SidebarContent({
         </div>
       </div>
 
-      {/* Status metrics */}
       <div className="flex flex-col gap-2 mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.3)" }}>
           Agent Status
@@ -311,13 +578,10 @@ function SidebarContent({
         ))}
       </div>
 
-      {/* Score bars */}
       <div className="flex flex-col gap-2 mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.3)" }}>
           Scores
         </div>
-
-        {/* Reputation — live from blockchain */}
         <div className="rounded-xl p-2.5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between mb-1.5">
             <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>Reputation</div>
@@ -340,8 +604,6 @@ function SidebarContent({
               transition={{ duration: 1.2, ease: "easeOut", delay: 0.4 }} />
           </div>
         </div>
-
-        {/* Validation */}
         <div className="rounded-xl p-2.5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
           <div className="flex items-center justify-between mb-1.5">
             <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>Validation</div>
@@ -356,7 +618,6 @@ function SidebarContent({
         </div>
       </div>
 
-      {/* Addresses */}
       <div className="flex flex-col gap-1.5 mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.3)" }}>
           Addresses
@@ -397,7 +658,6 @@ export default function Dashboard() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Fetch live reputation score on mount
   useEffect(() => {
     setScoreLoading(true);
     fetchReputationScore().then((score) => {
@@ -410,6 +670,7 @@ export default function Dashboard() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
+  // ── Wallet connect ───────────────────────────────────────────────────────
   const connectWallet = useCallback(async () => {
     if (typeof (window as any).ethereum === "undefined") {
       alert("No Web3 wallet detected. Install MetaMask or Rabby to connect.");
@@ -418,22 +679,20 @@ export default function Dashboard() {
     setConnecting(true);
     try {
       const accounts = await (window as any).ethereum.request({ method: "eth_requestAccounts" });
-
-      // Switch to Arc Testnet — add it if not present
       try {
         await (window as any).ethereum.request({
           method: "wallet_switchEthereumChain",
-          params: [{ chainId: ARC_CHAIN_ID }],
+          params: [{ chainId: ARC_CHAIN_ID_HEX }],
         });
       } catch (switchErr: any) {
         if (switchErr.code === 4902 || switchErr.code === -32603) {
           await (window as any).ethereum.request({
             method: "wallet_addEthereumChain",
             params: [{
-              chainId: ARC_CHAIN_ID,
+              chainId: ARC_CHAIN_ID_HEX,
               chainName: "Arc Testnet",
               nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-              rpcUrls: ["https://rpc.testnet.arc.network"],
+              rpcUrls: [ARC_TESTNET_RPC],
               blockExplorerUrls: ["https://explorer.testnet.arc.network"],
             }],
           });
@@ -441,7 +700,6 @@ export default function Dashboard() {
           throw switchErr;
         }
       }
-
       setWallet({ connected: true, address: accounts[0], chain: "ARC-TESTNET" });
     } catch (err) {
       console.error("Wallet connect error:", err);
@@ -450,6 +708,61 @@ export default function Dashboard() {
     }
   }, []);
 
+  // ── Plan execution (real on-chain via viem walletClient) ─────────────────
+  const executePlanForMessage = useCallback(async (messageId: string, plan: ExecutionPlan) => {
+    // Set status to executing
+    setMessages((prev) =>
+      prev.map((m) => m.id === messageId ? { ...m, planStatus: "executing" as PlanStatus } : m)
+    );
+
+    try {
+      // Step 1: Validate real on-chain balance BEFORE prompting wallet
+      await validatePlan(plan, wallet.address);
+
+      // Step 2: Execute — prompts MetaMask/wallet to sign, then polls for real receipt
+      const txHash = await executePlan(plan, wallet.address);
+
+      // Step 3: Mark success with the real on-chain TxHash
+      setMessages((prev) =>
+        prev.map((m) => m.id === messageId ? { ...m, planStatus: "success" as PlanStatus, txHash } : m)
+      );
+
+      // Add agent confirmation message with TxHash badge
+      setMessages((prev) => [...prev, {
+        id: `${Date.now()}-confirm`,
+        role: "agent",
+        content: `⚡ Transaction confirmed on Arc Testnet. Sent ${plan.amount} ${plan.token} to ${truncateAddress(plan.recipient)}.`,
+        timestamp: new Date(),
+        txHash,
+        toolUsed: "real_tx",
+      }]);
+    } catch (err: any) {
+      const errMsg = err?.message ?? String(err);
+      setMessages((prev) =>
+        prev.map((m) => m.id === messageId ? { ...m, planStatus: "error" as PlanStatus } : m)
+      );
+      setMessages((prev) => [...prev, {
+        id: `${Date.now()}-error`,
+        role: "agent",
+        content: `⚠️ Transaction failed: ${errMsg}`,
+        timestamp: new Date(),
+      }]);
+    }
+  }, [wallet.address]);
+
+  const cancelPlan = useCallback((messageId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => m.id === messageId ? { ...m, planStatus: "cancelled" as PlanStatus } : m)
+    );
+    setMessages((prev) => [...prev, {
+      id: `${Date.now()}-cancel`,
+      role: "agent",
+      content: "Transaction cancelled. Nothing was executed on-chain.",
+      timestamp: new Date(),
+    }]);
+  }, []);
+
+  // ── Send message ─────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || isTyping) return;
@@ -465,19 +778,24 @@ export default function Dashboard() {
         .filter((m) => !m.isStatus)
         .slice(-12)
         .map((m) => ({ role: m.role, content: m.content }));
-      const { reply, toolUsed, txHash } = await callBackendChat(
+
+      const { reply, toolUsed, txHash, plan } = await callBackendChat(
         content,
         wallet.connected ? wallet.address : undefined,
         history
       );
-      setMessages((prev) => [...prev, {
+
+      const agentMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "agent",
         content: reply,
         timestamp: new Date(),
         toolUsed,
         txHash,
-      }]);
+        ...(plan ? { plan, planStatus: "pending" as PlanStatus } : {}),
+      };
+
+      setMessages((prev) => [...prev, agentMsg]);
     } catch (err) {
       console.error("Chat error:", err);
       setMessages((prev) => [...prev, {
@@ -512,7 +830,6 @@ export default function Dashboard() {
       <header className="flex items-center justify-between px-3 sm:px-5 shrink-0"
         style={{ height: 52, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          {/* Back to landing */}
           <button onClick={() => navigate("/")}
             className="flex items-center gap-1.5 text-xs font-medium opacity-50 hover:opacity-100 transition-opacity shrink-0"
             style={{ color: "rgba(255,255,255,0.7)" }}>
@@ -530,7 +847,6 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* Mobile sidebar toggle */}
           <button onClick={() => setSidebarOpen((v) => !v)}
             className="md:hidden flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium"
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.7)" }}>
@@ -588,10 +904,16 @@ export default function Dashboard() {
 
         {/* Center — chat */}
         <main className="flex-1 flex flex-col overflow-hidden min-w-0">
-          {/* Chat history */}
           <div className="flex-1 overflow-y-auto px-3 sm:px-5 pt-4" style={{ paddingBottom: 8 }}>
             <AnimatePresence mode="popLayout">
-              {messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)}
+              {messages.map((msg) => (
+                <ChatMessage
+                  key={msg.id}
+                  message={msg}
+                  onConfirmPlan={executePlanForMessage}
+                  onCancelPlan={cancelPlan}
+                />
+              ))}
               {isTyping && <TypingIndicator key="typing" statusText={typingStatus} />}
             </AnimatePresence>
             <div ref={bottomRef} />
@@ -599,7 +921,6 @@ export default function Dashboard() {
 
           {/* Input area */}
           <div className="px-3 sm:px-4 pb-3 sm:pb-4 pt-2 shrink-0">
-            {/* Quick action chips */}
             <div className="flex items-center gap-1.5 sm:gap-2 mb-2 flex-wrap">
               {getQuickActions(wallet.connected ? wallet.address : undefined).map((action) => (
                 <motion.button key={action.label}
@@ -613,13 +934,13 @@ export default function Dashboard() {
               ))}
             </div>
 
-            {/* Textarea + send */}
             <div className="flex items-end gap-2 rounded-2xl p-2 pl-3 sm:pl-4"
               style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <textarea
                 ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
-                placeholder={wallet.connected ? "Ask J14-75 anything…" : "Connect wallet first"} rows={1} disabled={isTyping || !wallet.connected}
+                placeholder={wallet.connected ? "Ask J14-75 anything…" : "Connect wallet first"}
+                rows={1} disabled={isTyping || !wallet.connected}
                 className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed py-1 disabled:opacity-50 min-w-0"
                 style={{ color: "rgba(255,255,255,0.85)", maxHeight: 100, caretColor: "#FF6B00" }}
                 onInput={(e) => {
