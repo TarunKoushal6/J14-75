@@ -7,10 +7,9 @@ import {
   Address,
 } from "viem";
 import { arcTestnet } from "viem/chains";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
-const gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = gemini.getGenerativeModel({ model: "gemini-2.0-flash" });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ==========================================
 // 💾 HARDCODED KNOWN TOKENS (NO INDEXER NEEDED)
@@ -91,11 +90,11 @@ export class IntelligentAgent {
 
   async processComplexTask(context: TaskContext): Promise<TaskResult> {
     try {
-      console.log("🤖 Analyzing task with Gemini 1.5 Pro:", context.message);
+      console.log("🤖 Analyzing task with Groq AI:", context.message);
 
       // Step 1 & 2: Analyze intent and extract entities using LLM
       const aiAnalysis = await this.analyzeWithAI(context.message);
-      console.log("🔍 Gemini Extracted Entities & Intent:", aiAnalysis);
+      console.log("🔍 Groq Extracted Entities & Intent:", aiAnalysis);
 
       const taskTypes = aiAnalysis.taskTypes || ["query"];
       const entities = aiAnalysis.entities || {};
@@ -198,10 +197,14 @@ export class IntelligentAgent {
   }
 
   // ==========================================
-  // 🧠 AI BRAIN: Powered by Gemini 1.5 Pro
+  // 🧠 AI BRAIN: Powered by Groq (Llama 3.3-70B)
   // ==========================================
   private async analyzeWithAI(message: string) {
-    const systemPrompt = `You are an advanced Web3 AI Planner operating on the Arc Testnet.
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: `You are an advanced Web3 AI Planner operating on the Arc Testnet.
 Analyze the user's message and extract their intent, entities, and scheduling info into a STRICT JSON object.
 
 CRITICAL RULES TO PREVENT HALLUCINATIONS:
@@ -230,18 +233,15 @@ Required JSON format:
 Rules:
 - If the user implies sending to multiple addresses, include both 'batch' and 'transfer' in taskTypes.
 - If an entity type is not mentioned, leave its array empty [].
-- ONLY output valid JSON. Do not include any markdown formatting or extra text.`;
+- ONLY output valid JSON. Do not include any markdown formatting or extra text.`,
+        },
+        { role: "user", content: message },
+      ],
+      model: "llama-3.3-70b-versatile",
+      response_format: { type: "json_object" },
+    });
 
-    const fullPrompt = `${systemPrompt}\n\nUser message: ${message}`;
-    const response = await model.generateContent(fullPrompt);
-    const textContent = response.response.text();
-    
-    try {
-      return JSON.parse(textContent);
-    } catch (e) {
-      console.error("Failed to parse Gemini JSON response:", textContent);
-      return { taskTypes: ["query"], entities: {} };
-    }
+    return JSON.parse(completion.choices[0]?.message?.content || "{}");
   }
 
   // ==========================================
