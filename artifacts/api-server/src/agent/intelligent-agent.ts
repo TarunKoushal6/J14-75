@@ -116,6 +116,21 @@ export class IntelligentAgent {
         };
       }
 
+      // Special handling for transaction history queries: use ArcscanAPI
+      if (
+        taskTypes.includes("query") &&
+        (context.message.toLowerCase().includes("history") ||
+          context.message.toLowerCase().includes("transaction") ||
+          context.message.toLowerCase().includes("recent"))
+      ) {
+        console.log("📜 Transaction history query detected - fetching from ArcscanAPI...");
+        const txHistory = await this.fetchTransactionHistory(context.userAddress);
+        return {
+          success: true,
+          message: txHistory,
+        };
+      }
+
       // Step 3: Create execution plan
       const plan = await this.createExecutionPlan(taskTypes, entities, context, {
         isScheduled,
@@ -290,6 +305,55 @@ Rules:
     } catch (error: any) {
       console.error("Blockscout fetch error:", error);
       return `⚠️ Failed to fetch tokens: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`;
+    }
+  }
+
+  // ==========================================
+  // 📜 ARCSCAN API: Fetch transaction history
+  // ==========================================
+  private async fetchTransactionHistory(userAddress: string): Promise<string> {
+    try {
+      const apiKey = "proapi_cg35ok018tMducPVSOOFcAiTvrkQvQmpxysxsoNBYkpVtsozT3KHXPSYHwWtaJQJB_drNwvz";
+      const url = `https://testnet.arcscan.app/api/v2/addresses/${userAddress}/transactions?apikey=${apiKey}`;
+
+      console.log(`📜 Fetching transaction history for ${userAddress} from ArcscanAPI...`);
+      const res = await fetch(url, { timeout: 30000 });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(`ArcscanAPI error: ${error.message || res.status}`);
+      }
+
+      const data = await res.json() as any;
+      const transactions = data.result || [];
+
+      if (transactions.length === 0) {
+        return "No transactions found for this address.";
+      }
+
+      // Format transactions with status, date, and hash
+      const txList = transactions
+        .slice(0, 10) // Show last 10 transactions
+        .map((tx: any) => {
+          try {
+            const date = new Date(parseInt(tx.block_timestamp || "0") * 1000).toLocaleString();
+            const status = tx.result === "success" ? "✅ Success" : "❌ Failed";
+            const hash = tx.hash?.slice(0, 10) + "..." || "N/A";
+            const from = tx.from_address?.slice(0, 6) + "..." || "Unknown";
+            const to = tx.to_address?.slice(0, 6) + "..." || "Contract";
+            return `${status} | ${date} | ${hash} | ${from} → ${to}`;
+          } catch (e) {
+            return `Error parsing transaction`;
+          }
+        })
+        .join("\n");
+
+      return `✅ Last 10 transactions:\n${txList}`;
+    } catch (error: any) {
+      console.error("ArcscanAPI fetch error:", error);
+      return `⚠️ Failed to fetch transaction history: ${
         error instanceof Error ? error.message : "Unknown error"
       }`;
     }
