@@ -91,7 +91,7 @@ export class IntelligentAgent {
 
   async processComplexTask(context: TaskContext): Promise<TaskResult> {
     try {
-      console.log("🤖 Analyzing task with Gemini 2.0 Flash:", context.message);
+      console.log("🤖 Analyzing task with Gemini 1.5 Pro:", context.message);
 
       // Step 1 & 2: Analyze intent and extract entities using LLM
       const aiAnalysis = await this.analyzeWithAI(context.message);
@@ -183,7 +183,7 @@ export class IntelligentAgent {
   }
 
   // ==========================================
-  // 🧠 AI BRAIN: Powered by Gemini 2.0 Flash
+  // 🧠 AI BRAIN: Powered by Gemini 1.5 Pro
   // ==========================================
   private async analyzeWithAI(message: string) {
     const systemPrompt = `You are an advanced Web3 AI Planner operating on the Arc Testnet.
