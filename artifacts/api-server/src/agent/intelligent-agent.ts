@@ -7,9 +7,10 @@ import {
   Address,
 } from "viem";
 import { arcTestnet } from "viem/chains";
-import Groq from "groq-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = gemini.getGenerativeModel({ model: "gemini-2.0-flash" });
 
 // ==========================================
 // 💾 HARDCODED KNOWN TOKENS (NO INDEXER NEEDED)
@@ -90,11 +91,11 @@ export class IntelligentAgent {
 
   async processComplexTask(context: TaskContext): Promise<TaskResult> {
     try {
-      console.log("🤖 Analyzing task with Groq AI:", context.message);
+      console.log("🤖 Analyzing task with Gemini 2.0 Flash:", context.message);
 
       // Step 1 & 2: Analyze intent and extract entities using LLM
       const aiAnalysis = await this.analyzeWithAI(context.message);
-      console.log("🔍 Groq Extracted Entities & Intent:", aiAnalysis);
+      console.log("🔍 Gemini Extracted Entities & Intent:", aiAnalysis);
 
       const taskTypes = aiAnalysis.taskTypes || ["query"];
       const entities = aiAnalysis.entities || {};
@@ -182,51 +183,50 @@ export class IntelligentAgent {
   }
 
   // ==========================================
-  // 🧠 AI BRAIN: Powered by Groq (Llama 3.3-70B)
+  // 🧠 AI BRAIN: Powered by Gemini 2.0 Flash
   // ==========================================
   private async analyzeWithAI(message: string) {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `You are an advanced Web3 AI Planner operating on the Arc Testnet.
-          Analyze the user's message and extract their intent, entities, and scheduling info into a STRICT JSON object.
-          
-          CRITICAL RULES TO PREVENT HALLUCINATIONS:
-          1. NEVER return txHash, block numbers, or fake transaction data in the response.
-          2. If a task is IMPOSSIBLE (e.g., swap without DEX, bridge to non-existent chain), flag it with "taskTypes": ["impossible"].
-          3. If the user asks about a task you cannot verify on-chain (e.g., "is my transaction confirmed?"), return "taskTypes": ["query"] instead of faking data.
-          4. For scheduled tasks (time-based or price-based), return "isScheduled": true and describe the trigger clearly in "scheduleTrigger".
-          5. ONLY use tokens from: USDC (native), EURC (ERC-20). Reject unknown tokens or ETH requests.
-          6. For token balance queries, extract the TARGET ADDRESS if different from the connected wallet.
-          7. If a token address is missing or not deployed, flag it as requiring ARC_EURC_ADDRESS environment variable.
-          
-          Required JSON format:
-          {
-            "taskTypes": ["swap" | "transfer" | "deploy" | "liquidity" | "batch" | "bridge" | "analyze" | "query" | "impossible"],
-            "entities": {
-              "addresses": ["0x..."],
-              "queryAddresses": ["0x..."],
-              "amounts": [number],
-              "tokens": ["USDC", "EURC"],
-              "contractTypes": ["ERC20", "ERC721", "ERC1155"]
-            },
-            "isScheduled": false,
-            "scheduleTrigger": "when ETH hits $3000" or "in 5 minutes" or null
-          }
-          
-          Rules:
-          - If the user implies sending to multiple addresses, include both 'batch' and 'transfer' in taskTypes.
-          - If an entity type is not mentioned, leave its array empty [].
-          - ONLY output valid JSON. Do not include any markdown formatting or extra text.`,
-        },
-        { role: "user", content: message },
-      ],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" },
-    });
+    const systemPrompt = `You are an advanced Web3 AI Planner operating on the Arc Testnet.
+Analyze the user's message and extract their intent, entities, and scheduling info into a STRICT JSON object.
 
-    return JSON.parse(completion.choices[0]?.message?.content || "{}");
+CRITICAL RULES TO PREVENT HALLUCINATIONS:
+1. NEVER return txHash, block numbers, or fake transaction data in the response.
+2. If a task is IMPOSSIBLE (e.g., swap without DEX, bridge to non-existent chain), flag it with "taskTypes": ["impossible"].
+3. If the user asks about a task you cannot verify on-chain (e.g., "is my transaction confirmed?"), return "taskTypes": ["query"] instead of faking data.
+4. For scheduled tasks (time-based or price-based), return "isScheduled": true and describe the trigger clearly in "scheduleTrigger".
+5. ONLY use tokens from: USDC (native), EURC (ERC-20). Reject unknown tokens or ETH requests.
+6. For token balance queries, extract the TARGET ADDRESS if different from the connected wallet.
+7. If a token address is missing or not deployed, flag it as requiring ARC_EURC_ADDRESS environment variable.
+
+Required JSON format:
+{
+  "taskTypes": ["swap" | "transfer" | "deploy" | "liquidity" | "batch" | "bridge" | "analyze" | "query" | "impossible"],
+  "entities": {
+    "addresses": ["0x..."],
+    "queryAddresses": ["0x..."],
+    "amounts": [number],
+    "tokens": ["USDC", "EURC"],
+    "contractTypes": ["ERC20", "ERC721", "ERC1155"]
+  },
+  "isScheduled": false,
+  "scheduleTrigger": "when ETH hits $3000" or "in 5 minutes" or null
+}
+
+Rules:
+- If the user implies sending to multiple addresses, include both 'batch' and 'transfer' in taskTypes.
+- If an entity type is not mentioned, leave its array empty [].
+- ONLY output valid JSON. Do not include any markdown formatting or extra text.`;
+
+    const fullPrompt = `${systemPrompt}\n\nUser message: ${message}`;
+    const response = await model.generateContent(fullPrompt);
+    const textContent = response.response.text();
+    
+    try {
+      return JSON.parse(textContent);
+    } catch (e) {
+      console.error("Failed to parse Gemini JSON response:", textContent);
+      return { taskTypes: ["query"], entities: {} };
+    }
   }
 
   // ==========================================
