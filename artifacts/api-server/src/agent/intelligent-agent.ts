@@ -102,6 +102,21 @@ export class IntelligentAgent {
       const isScheduled = aiAnalysis.isScheduled || false;
       const scheduleTrigger = aiAnalysis.scheduleTrigger;
 
+      // Special handling for balance queries: use Blockscout API
+      if (
+        taskTypes.includes("query") &&
+        (context.message.toLowerCase().includes("balance") ||
+          context.message.toLowerCase().includes("token") ||
+          context.message.toLowerCase().includes("all token"))
+      ) {
+        console.log("💰 Balance query detected - fetching from Blockscout...");
+        const tokenList = await this.fetchAllTokensFromBlockscout(context.userAddress);
+        return {
+          success: true,
+          message: tokenList,
+        };
+      }
+
       // Step 3: Create execution plan
       const plan = await this.createExecutionPlan(taskTypes, entities, context, {
         isScheduled,
@@ -194,7 +209,7 @@ CRITICAL RULES TO PREVENT HALLUCINATIONS:
 2. If a task is IMPOSSIBLE (e.g., swap without DEX, bridge to non-existent chain), flag it with "taskTypes": ["impossible"].
 3. If the user asks about a task you cannot verify on-chain (e.g., "is my transaction confirmed?"), return "taskTypes": ["query"] instead of faking data.
 4. For scheduled tasks (time-based or price-based), return "isScheduled": true and describe the trigger clearly in "scheduleTrigger".
-5. ONLY use tokens from: USDC (native), EURC (ERC-20). Reject unknown tokens or ETH requests.
+5. For direct operations (transfer, swap, approve): use USDC or EURC only. For balance queries: any token is supported via Blockscout API.
 6. For token balance queries, extract the TARGET ADDRESS if different from the connected wallet.
 7. If a token address is missing or not deployed, flag it as requiring ARC_EURC_ADDRESS environment variable.
 
@@ -230,6 +245,57 @@ Rules:
   }
 
   // ==========================================
+  // 📦 BLOCKSCOUT API: Fetch all user tokens
+  // ==========================================
+  private async fetchAllTokensFromBlockscout(userAddress: string): Promise<string> {
+    if (!process.env.BLOCKSCOUT_API_KEY) {
+      return "⚠️ Blockscout API key not configured. Cannot fetch token list.";
+    }
+
+    try {
+      const baseUrl = "https://testnet.arc-explorer.com/api/v2";
+      const url = `${baseUrl}/addresses/${userAddress}/tokens?key=${process.env.BLOCKSCOUT_API_KEY}`;
+
+      console.log(`📦 Fetching all tokens for ${userAddress} from Blockscout...`);
+      const res = await fetch(url, { timeout: 30000 });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(`Blockscout API error: ${error.message || res.status}`);
+      }
+
+      const data = await res.json() as any;
+      const tokens = data.result || [];
+
+      if (tokens.length === 0) {
+        return "No tokens found for this address.";
+      }
+
+      // Format token list with balances
+      const tokenList = tokens
+        .map((token: any) => {
+          try {
+            const balance = formatUnits(
+              BigInt(token.value || "0"),
+              parseInt(token.token?.decimals || "18")
+            );
+            return `• ${token.token?.symbol || "Unknown"} (${token.token?.address?.slice(0, 6)}...): ${balance} ${token.token?.symbol || ""}`;
+          } catch (e) {
+            return `• ${token.token?.symbol || "Unknown"}: Error parsing balance`;
+          }
+        })
+        .join("\n");
+
+      return `✅ Found ${tokens.length} token(s):\n${tokenList}`;
+    } catch (error: any) {
+      console.error("Blockscout fetch error:", error);
+      return `⚠️ Failed to fetch tokens: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`;
+    }
+  }
+
+  // ==========================================
   // 🔐 REAL ON-CHAIN BALANCE VALIDATION
   // ==========================================
   private async getTokenBalance(
@@ -238,7 +304,7 @@ Rules:
   ): Promise<bigint> {
     const tokenInfo = KNOWN_TOKENS[token];
     if (!tokenInfo)
-      throw new Error(`Unsupported token: ${token}. Only USDC, EURC, ETH supported.`);
+      throw new Error(`Token ${token} not in predefined list. Use "check balance" to see all available tokens via Blockscout.`);
 
     try {
       if (tokenInfo.address === "native") {
