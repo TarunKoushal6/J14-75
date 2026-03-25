@@ -268,22 +268,24 @@ Rules:
     }
 
     try {
-      const baseUrl = "https://testnet.arc-explorer.com/api/v2";
-      const url = `${baseUrl}/addresses/${userAddress}/tokens?key=${process.env.BLOCKSCOUT_API_KEY}`;
+      // Use the correct Arc Testnet explorer URL
+      const url = `https://testnet.arcscan.app/api/v2/addresses/${userAddress}/tokens?apikey=proapi_cg35ok018tMducPVSOOFcAiTvrkQvQmpxysxsoNBYkpVtsozT3KHXPSYHwWtaJQJB_drNwvz`;
 
-      console.log(`📦 Fetching all tokens for ${userAddress} from Blockscout...`);
-      const res = await fetch(url, { timeout: 30000 });
+      console.log(`📦 Fetching all tokens for ${userAddress} from ArcscanAPI...`);
+      const res = await fetch(url);
 
       if (!res.ok) {
-        const error = await res.json().catch(() => ({ message: res.statusText }));
-        throw new Error(`Blockscout API error: ${error.message || res.status}`);
+        console.error(`ArcscanAPI HTTP error: ${res.status} ${res.statusText}`);
+        const text = await res.text().catch(() => "");
+        console.error("Response:", text.slice(0, 200));
+        throw new Error(`ArcscanAPI error: ${res.status} ${res.statusText}`);
       }
 
       const data = await res.json() as any;
       const tokens = data.result || [];
 
-      if (tokens.length === 0) {
-        return "No tokens found for this address.";
+      if (!tokens || tokens.length === 0) {
+        return `✅ Address has 0 tokens or is new on Arc Testnet.`;
       }
 
       // Format token list with balances
@@ -294,8 +296,11 @@ Rules:
               BigInt(token.value || "0"),
               parseInt(token.token?.decimals || "18")
             );
-            return `• ${token.token?.symbol || "Unknown"} (${token.token?.address?.slice(0, 6)}...): ${balance} ${token.token?.symbol || ""}`;
+            const symbol = token.token?.symbol || "UNKNOWN";
+            const address = token.token?.address ? token.token.address.slice(0, 6) : "0x????";
+            return `• ${symbol} (${address}...): ${balance}`;
           } catch (e) {
+            console.error("Token parsing error:", e);
             return `• ${token.token?.symbol || "Unknown"}: Error parsing balance`;
           }
         })
@@ -303,7 +308,7 @@ Rules:
 
       return `✅ Found ${tokens.length} token(s):\n${tokenList}`;
     } catch (error: any) {
-      console.error("Blockscout fetch error:", error);
+      console.error("ArcscanAPI fetch error:", error);
       return `⚠️ Failed to fetch tokens: ${
         error instanceof Error ? error.message : "Unknown error"
       }`;
@@ -319,18 +324,20 @@ Rules:
       const url = `https://testnet.arcscan.app/api/v2/addresses/${userAddress}/transactions?apikey=${apiKey}`;
 
       console.log(`📜 Fetching transaction history for ${userAddress} from ArcscanAPI...`);
-      const res = await fetch(url, { timeout: 30000 });
+      const res = await fetch(url);
 
       if (!res.ok) {
-        const error = await res.json().catch(() => ({ message: res.statusText }));
-        throw new Error(`ArcscanAPI error: ${error.message || res.status}`);
+        console.error(`ArcscanAPI HTTP error: ${res.status} ${res.statusText}`);
+        const text = await res.text().catch(() => "");
+        console.error("Response:", text.slice(0, 200));
+        throw new Error(`ArcscanAPI error: ${res.status} ${res.statusText}`);
       }
 
       const data = await res.json() as any;
       const transactions = data.result || [];
 
-      if (transactions.length === 0) {
-        return "No transactions found for this address.";
+      if (!transactions || transactions.length === 0) {
+        return `✅ No transactions found for this address (address is new or has no activity).`;
       }
 
       // Format transactions with status, date, and hash
@@ -338,19 +345,21 @@ Rules:
         .slice(0, 10) // Show last 10 transactions
         .map((tx: any) => {
           try {
-            const date = new Date(parseInt(tx.block_timestamp || "0") * 1000).toLocaleString();
-            const status = tx.result === "success" ? "✅ Success" : "❌ Failed";
-            const hash = tx.hash?.slice(0, 10) + "..." || "N/A";
-            const from = tx.from_address?.slice(0, 6) + "..." || "Unknown";
-            const to = tx.to_address?.slice(0, 6) + "..." || "Contract";
-            return `${status} | ${date} | ${hash} | ${from} → ${to}`;
+            const timestamp = parseInt(tx.block_timestamp || "0");
+            const date = timestamp > 0 ? new Date(timestamp * 1000).toLocaleString() : "Unknown date";
+            const status = tx.result === "success" ? "✅" : "❌";
+            const hash = tx.hash ? tx.hash.slice(0, 10) + "..." : "N/A";
+            const from = tx.from_address ? tx.from_address.slice(0, 6) + "..." : "0x0000...";
+            const to = tx.to_address ? tx.to_address.slice(0, 6) + "..." : "0x0000...";
+            return `${status} ${date} | ${hash} | ${from} → ${to}`;
           } catch (e) {
+            console.error("Transaction parsing error:", e);
             return `Error parsing transaction`;
           }
         })
         .join("\n");
 
-      return `✅ Last 10 transactions:\n${txList}`;
+      return `✅ Last ${Math.min(10, transactions.length)} transactions:\n${txList}`;
     } catch (error: any) {
       console.error("ArcscanAPI fetch error:", error);
       return `⚠️ Failed to fetch transaction history: ${
