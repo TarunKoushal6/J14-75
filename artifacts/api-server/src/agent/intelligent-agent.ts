@@ -282,26 +282,30 @@ Rules:
       }
 
       const data = await res.json() as any;
-      const tokens = data.result || [];
+      // ArcscanAPI returns 'items' not 'result'
+      const tokens = data.items || data.result || [];
 
       if (!tokens || tokens.length === 0) {
-        return `✅ Address has 0 tokens or is new on Arc Testnet.`;
+        return `✅ Address has no tokens on Arc Testnet (new address or no token balance).`;
       }
 
       // Format token list with balances
       const tokenList = tokens
         .map((token: any) => {
           try {
-            const balance = formatUnits(
-              BigInt(token.value || "0"),
-              parseInt(token.token?.decimals || "18")
-            );
-            const symbol = token.token?.symbol || "UNKNOWN";
-            const address = token.token?.address ? token.token.address.slice(0, 6) : "0x????";
+            // Handle different API response formats
+            const tokenValue = token.value || token.token_value || "0";
+            const decimals = token.token?.decimals || token.decimals || 18;
+            const symbol = token.token?.symbol || token.symbol || "UNKNOWN";
+            const tokenAddr = token.token?.address || token.token_address || "0x0000";
+            
+            const balance = formatUnits(BigInt(tokenValue), parseInt(decimals.toString()));
+            const address = tokenAddr.slice(0, 6) || "0x????";
             return `• ${symbol} (${address}...): ${balance}`;
           } catch (e) {
             console.error("Token parsing error:", e);
-            return `• ${token.token?.symbol || "Unknown"}: Error parsing balance`;
+            const symbol = token.token?.symbol || token.symbol || "Unknown";
+            return `• ${symbol}: Error parsing balance`;
           }
         })
         .join("\n");
@@ -334,7 +338,8 @@ Rules:
       }
 
       const data = await res.json() as any;
-      const transactions = data.result || [];
+      // ArcscanAPI returns 'items' not 'result'
+      const transactions = data.items || data.result || [];
 
       if (!transactions || transactions.length === 0) {
         return `✅ No transactions found for this address (address is new or has no activity).`;
@@ -345,13 +350,14 @@ Rules:
         .slice(0, 10) // Show last 10 transactions
         .map((tx: any) => {
           try {
-            const timestamp = parseInt(tx.block_timestamp || "0");
+            const timestamp = parseInt(tx.block_timestamp || tx.timestamp || "0");
             const date = timestamp > 0 ? new Date(timestamp * 1000).toLocaleString() : "Unknown date";
-            const status = tx.result === "success" ? "✅" : "❌";
-            const hash = tx.hash ? tx.hash.slice(0, 10) + "..." : "N/A";
+            const status = tx.result === "success" || tx.status === "ok" ? "✅" : "❌";
+            const hash = tx.hash || tx.transaction_hash;
+            const hashStr = hash ? hash.slice(0, 10) + "..." : "N/A";
             const from = tx.from_address ? tx.from_address.slice(0, 6) + "..." : "0x0000...";
             const to = tx.to_address ? tx.to_address.slice(0, 6) + "..." : "0x0000...";
-            return `${status} ${date} | ${hash} | ${from} → ${to}`;
+            return `${status} ${date} | ${hashStr} | ${from} → ${to}`;
           } catch (e) {
             console.error("Transaction parsing error:", e);
             return `Error parsing transaction`;

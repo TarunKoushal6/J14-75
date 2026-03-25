@@ -38,11 +38,10 @@ router.post("/", async (req, res) => {
     // Log the result
     console.log("✅ Agent result:", result);
 
-    // Return the result to the frontend
+    // Return the result to the frontend (don't include raw plan data with BigInt)
     res.json({
       reply: result.message,
       success: result.success,
-      data: result.data,
       txHash: result.txHash,
       taskId: result.taskId,
       isScheduled: result.isScheduled,
