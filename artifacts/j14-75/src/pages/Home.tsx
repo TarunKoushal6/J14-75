@@ -373,6 +373,7 @@ export default function Home() {
           loop
           muted
           playsInline
+          preload="auto"
           style={{
             position: "absolute",
             inset: 0,
@@ -682,6 +683,7 @@ export default function Home() {
               loop
               muted
               playsInline
+              preload="auto"
               style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
               src={`${BASE_URL}earth.mp4`}
             />

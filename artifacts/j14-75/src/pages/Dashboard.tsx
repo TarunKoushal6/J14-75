@@ -164,16 +164,6 @@ function getQuickActions(walletAddress?: string) {
         ? `Show all token balances for ${walletAddress}`
         : "Show my token balances on Arc Testnet",
     },
-    {
-      label: "Bridge USDC",
-      icon: ArrowRightLeft,
-      prompt: "How do I bridge 100 USDC from ETH Sepolia to Arc Testnet via CCTP?",
-    },
-    {
-      label: "Audit contract",
-      icon: Shield,
-      prompt: "Audit the contract at 0x8004A818BFB912233c491871b3d84c89A494BD9e on Arc Testnet",
-    },
   ];
 }
 
