@@ -31,3 +31,4 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
+VITE_TEST_CLIENT_KEY = "ce0196578495498eeae3b5e75b7fb3e1:26f84a81101662e8cc51caba85796cd3"

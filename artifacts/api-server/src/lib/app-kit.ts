@@ -4,12 +4,15 @@
  * Uses the official Arc App Kit SDK for all on-chain execution:
  *  - kit.send()   → token transfers on Arc Testnet
  *  - kit.bridge() → cross-chain USDC via CCTP (Arc ↔ other chains)
- *  - kit.swap()   → NOT supported on Arc Testnet (testnet limitation per Arc docs)
+ *  - kit.swap()   → cross-chain/same-chain swaps (requires KIT_KEY env var)
  *
  * Adapter: @circle-fin/adapter-circle-wallets
  *   – Connects to Circle Developer-Controlled Wallets
  *   – Requires CIRCLE_API_KEY + CIRCLE_ENTITY_SECRET
  *   – No raw private keys needed; Circle manages key custody
+ *
+ * Gas Station: Circle-sponsored gas via GAS_STATION_POLICY_ID env var
+ *   – Attached as policyId to send/bridge/swap calls for email-authenticated users
  *
  * Docs: https://docs.arc.network/app-kit
  */
@@ -243,6 +246,67 @@ export async function appKitBridge(opts: BridgeOptions): Promise<{
   });
 
   console.log("✅ kit.bridge() result:", JSON.stringify(result, null, 2));
+
+  const steps = (result as any).steps ?? [];
+  const lastTxHash =
+    steps[steps.length - 1]?.txHash ?? (result as any).txHash ?? "";
+
+  return { txHash: lastTxHash, steps };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SWAP — token swap via App Kit
+// Requires KIT_KEY env var (from Circle Console) for the swap config.
+// Note: Swap is only supported on mainnet. If called with Arc_Testnet it will
+// fail at the API level; the agent layer checks this first and warns the user.
+// ──────────────────────────────────────────────────────────────────────────────
+export type SwapOptions = {
+  circleAddress: string;
+  chain: string;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  gasSponsorPolicyId?: string;
+};
+
+export async function appKitSwap(opts: SwapOptions): Promise<{
+  txHash: string;
+  steps: any[];
+}> {
+  const kitKey = process.env.KIT_KEY;
+  if (!kitKey) {
+    throw new Error("KIT_KEY environment variable is required for kit.swap().");
+  }
+
+  const adapter = buildCircleAdapter();
+  const chainId = resolveChain(opts.chain);
+
+  console.log(
+    `🔄 kit.swap(): ${opts.amountIn} ${opts.tokenIn} → ${opts.tokenOut} on ${chainId} from ${opts.circleAddress}`
+  );
+
+  const swapParams: Record<string, any> = {
+    from: {
+      adapter,
+      chain: chainId as any,
+      address: opts.circleAddress,
+    },
+    tokenIn: opts.tokenIn,
+    tokenOut: opts.tokenOut,
+    amountIn: opts.amountIn,
+    config: {
+      kitKey,
+    },
+  };
+
+  // Attach Gas Station policy if provided (for email-authenticated users)
+  if (opts.gasSponsorPolicyId) {
+    swapParams.policyId = opts.gasSponsorPolicyId;
+  }
+
+  const result = await (kit as any).swap(swapParams);
+
+  console.log("✅ kit.swap() result:", JSON.stringify(result, null, 2));
 
   const steps = (result as any).steps ?? [];
   const lastTxHash =

@@ -8,9 +8,10 @@ const agent = new IntelligentAgent();
 
 // ── Route ─────────────────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
-  const { message, walletAddress, history = [] } = req.body as {
+  const { message, walletAddress, isEmailUser = false, history = [] } = req.body as {
     message: string;
     walletAddress?: string;
+    isEmailUser?: boolean;
     history?: Array<{ role: "user" | "agent"; content: string }>;
   };
 
@@ -32,6 +33,7 @@ router.post("/", async (req, res) => {
       userAddress: walletAddress,
       message,
       chainId: 5042002, // Arc Testnet
+      isEmailUser, // enables Gas Station sponsorship for email-authenticated users
     });
 
     // Log the result

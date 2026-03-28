@@ -2,10 +2,13 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap, Shield, Activity, Wallet, ArrowRightLeft, Search,
-  Send, ChevronRight, Copy, Check, ExternalLink, AlertTriangle,
-  BarChart3, Lock, Globe, Cpu
+  Send, Copy, Check, ExternalLink, AlertTriangle,
+  BarChart3, Lock, Globe, Cpu, Mail, LogOut, Eye, EyeOff
 } from "lucide-react";
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────────────────────────────────────
 interface Message {
   id: string;
   role: "user" | "agent";
@@ -20,12 +23,19 @@ interface WalletState {
   chain: string;
 }
 
-const QUICK_ACTIONS = [
-  { label: "Check balance", icon: Wallet, prompt: "Check my balance on ARC-TESTNET" },
-  { label: "Bridge USDC", icon: ArrowRightLeft, prompt: "Simulate bridging 100 USDC from ETH-SEPOLIA to ARC-TESTNET" },
-  { label: "Audit contract", icon: Shield, prompt: "Audit the ERC-8004 IdentityRegistry at 0x8004A818BFB912233c491871b3d84c89A494BD9e on ARC-TESTNET" },
-];
+// Auth can be either "wallet" (MetaMask/Rabby) or "email" (Circle Modular)
+type AuthMode = "none" | "wallet" | "email";
 
+interface AuthState {
+  mode: AuthMode;
+  address: string;
+  email?: string;
+  isEmailUser: boolean; // enables Gas Station sponsorship
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Constants
+// ──────────────────────────────────────────────────────────────────────────────
 const AGENT_METRICS = {
   id: "75",
   name: "J14-75",
@@ -39,14 +49,11 @@ const AGENT_METRICS = {
   validatorAddress: "0x8004B663056A597Dffe9eCcC1965A193B7388713",
 };
 
-const WELCOME_MESSAGE: Message = {
-  id: "welcome",
-  role: "agent",
-  content: "Online. I'm J14-75 — ERC-8004 registered, KYC-verified, reputation 95/100 on Arc Testnet.\n\nI can manage wallets, check on-chain balances, simulate USDC bridges via CCTP, and audit smart contracts. What do you need?",
-  timestamp: new Date(),
-};
-
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
 function truncateAddress(addr: string) {
+  if (!addr || addr.length < 10) return addr;
   return addr.slice(0, 6) + "..." + addr.slice(-4);
 }
 
@@ -82,7 +89,256 @@ function ScoreRing({ value, size = 56, color = "#FF6B00" }: { value: number; siz
   );
 }
 
-function AgentSidebar({ wallet }: { wallet: WalletState }) {
+// ──────────────────────────────────────────────────────────────────────────────
+// Circle Email OTP Auth
+// Uses Circle Modular Wallets SDK (@circle-fin/modular-wallets-core)
+// The SDK handles: email delivery, OTP verification, wallet creation (ERC-4337 SCA)
+// TEST_CLIENT_KEY is passed via import.meta.env.VITE_TEST_CLIENT_KEY
+// ──────────────────────────────────────────────────────────────────────────────
+
+type EmailAuthStep = "idle" | "email_input" | "otp_input" | "loading" | "done" | "error";
+
+interface EmailAuthState {
+  step: EmailAuthStep;
+  email: string;
+  otp: string;
+  errorMsg: string;
+  walletAddress: string;
+  sessionToken: string;
+}
+
+function useCircleEmailAuth() {
+  const [authState, setAuthState] = useState<EmailAuthState>({
+    step: "idle",
+    email: "",
+    otp: "",
+    errorMsg: "",
+    walletAddress: "",
+    sessionToken: "",
+  });
+
+  const clientKey = import.meta.env.VITE_TEST_CLIENT_KEY as string | undefined;
+
+  const requestOtp = useCallback(async (email: string) => {
+    if (!clientKey) {
+      setAuthState(s => ({ ...s, step: "error", errorMsg: "VITE_TEST_CLIENT_KEY is not configured." }));
+      return;
+    }
+
+    setAuthState(s => ({ ...s, step: "loading", email, errorMsg: "" }));
+
+    try {
+      // Circle Modular Wallets — Email OTP initiation
+      // The SDK sends a verification code to the user's email via Circle's infrastructure.
+      // We use the REST API directly since the web SDK uses passkeys as primary flow.
+      // For Email OTP specifically, we POST to Circle's user-controlled wallet initiation endpoint.
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const res = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, clientKey }),
+      });
+
+      if (res.ok) {
+        setAuthState(s => ({ ...s, step: "otp_input" }));
+      } else {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Server error ${res.status}`);
+      }
+    } catch (err: any) {
+      setAuthState(s => ({
+        ...s,
+        step: "error",
+        errorMsg: err.message ?? "Failed to send OTP. Check your email and try again.",
+      }));
+    }
+  }, [clientKey]);
+
+  const verifyOtp = useCallback(async (otp: string) => {
+    setAuthState(s => ({ ...s, step: "loading", otp, errorMsg: "" }));
+
+    try {
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const res = await fetch(`${baseUrl}/api/auth/email/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authState.email, otp }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setAuthState(s => ({
+          ...s,
+          step: "done",
+          walletAddress: data.walletAddress ?? "",
+          sessionToken: data.sessionToken ?? "",
+        }));
+        return { walletAddress: data.walletAddress ?? "", sessionToken: data.sessionToken ?? "" };
+      } else {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Invalid OTP. Please try again.");
+      }
+    } catch (err: any) {
+      setAuthState(s => ({
+        ...s,
+        step: "otp_input",
+        errorMsg: err.message ?? "Verification failed. Please try again.",
+      }));
+      return null;
+    }
+  }, [authState.email]);
+
+  const reset = useCallback(() => {
+    setAuthState({ step: "idle", email: "", otp: "", errorMsg: "", walletAddress: "", sessionToken: "" });
+  }, []);
+
+  return { authState, setAuthState, requestOtp, verifyOtp, reset };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Email Sign In Panel
+// ──────────────────────────────────────────────────────────────────────────────
+function EmailSignInPanel({
+  onSuccess,
+  onClose,
+}: {
+  onSuccess: (address: string, email: string) => void;
+  onClose: () => void;
+}) {
+  const { authState, setAuthState, requestOtp, verifyOtp } = useCircleEmailAuth();
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const emailRef = useRef<HTMLInputElement>(null);
+  const otpRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (authState.step === "email_input" || authState.step === "idle") emailRef.current?.focus();
+    if (authState.step === "otp_input") otpRef.current?.focus();
+  }, [authState.step]);
+
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !email.includes("@")) return;
+    setAuthState(s => ({ ...s, step: "email_input" }));
+    await requestOtp(email.trim());
+  };
+
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (otp.trim().length < 4) return;
+    const result = await verifyOtp(otp.trim());
+    if (result?.walletAddress) {
+      onSuccess(result.walletAddress, email);
+    }
+  };
+
+  const isLoading = authState.step === "loading";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95, y: -8 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="absolute top-14 right-4 z-50 w-72 rounded-2xl p-4 shadow-2xl"
+      style={{
+        background: "#0a0a0a",
+        border: "1px solid rgba(255,107,0,0.2)",
+        boxShadow: "0 0 40px rgba(255,107,0,0.08)",
+      }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Mail size={14} style={{ color: "#FF6B00" }} />
+          <span className="text-sm font-semibold text-white">Email Sign In</span>
+        </div>
+        <button onClick={onClose} className="text-white/30 hover:text-white/70 transition-colors text-lg leading-none">×</button>
+      </div>
+
+      <div className="text-[11px] mb-3" style={{ color: "rgba(255,255,255,0.4)" }}>
+        Powered by Circle · Gasless wallet auto-created
+      </div>
+
+      {(authState.step === "idle" || authState.step === "email_input" || authState.step === "loading") && authState.step !== "otp_input" && (
+        <form onSubmit={handleEmailSubmit} className="flex flex-col gap-2">
+          <input
+            ref={emailRef}
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="your@email.com"
+            disabled={isLoading}
+            className="w-full rounded-xl px-3 py-2 text-sm outline-none disabled:opacity-50"
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              color: "rgba(255,255,255,0.9)",
+            }}
+          />
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            disabled={isLoading || !email.includes("@")}
+            className="w-full py-2 rounded-xl text-sm font-semibold text-black disabled:opacity-40 transition-opacity"
+            style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}
+          >
+            {isLoading ? "Sending..." : "Send Code"}
+          </motion.button>
+        </form>
+      )}
+
+      {authState.step === "otp_input" && (
+        <form onSubmit={handleOtpSubmit} className="flex flex-col gap-2">
+          <div className="text-[11px] text-center" style={{ color: "rgba(255,255,255,0.5)" }}>
+            Code sent to <span className="text-orange-400">{email}</span>
+          </div>
+          <input
+            ref={otpRef}
+            type="text"
+            inputMode="numeric"
+            value={otp}
+            onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+            placeholder="Enter verification code"
+            className="w-full rounded-xl px-3 py-2 text-sm text-center tracking-widest outline-none"
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,107,0,0.3)",
+              color: "rgba(255,255,255,0.9)",
+            }}
+          />
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            disabled={otp.trim().length < 4}
+            className="w-full py-2 rounded-xl text-sm font-semibold text-black disabled:opacity-40"
+            style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}
+          >
+            Verify & Sign In
+          </motion.button>
+          <button
+            type="button"
+            onClick={() => setAuthState(s => ({ ...s, step: "idle", errorMsg: "" }))}
+            className="text-[11px] text-center"
+            style={{ color: "rgba(255,255,255,0.35)" }}
+          >
+            Try a different email
+          </button>
+        </form>
+      )}
+
+      {authState.errorMsg && (
+        <div className="mt-2 text-[11px] text-red-400 text-center">{authState.errorMsg}</div>
+      )}
+    </motion.div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Agent Sidebar
+// ──────────────────────────────────────────────────────────────────────────────
+function AgentSidebar({ auth }: { auth: AuthState }) {
   return (
     <aside
       className="w-[220px] shrink-0 flex flex-col gap-4 py-5 px-4"
@@ -138,6 +394,16 @@ function AgentSidebar({ wallet }: { wallet: WalletState }) {
             <div className="text-xs font-semibold text-white">Arc Testnet</div>
           </div>
         </div>
+
+        {auth.isEmailUser && (
+          <div className="glass rounded-xl p-3 flex items-center gap-2.5">
+            <Zap size={13} style={{ color: "#22c55e" }} />
+            <div>
+              <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.4)" }}>Gas</div>
+              <div className="text-xs font-semibold" style={{ color: "#22c55e" }}>Sponsored</div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -189,12 +455,14 @@ function AgentSidebar({ wallet }: { wallet: WalletState }) {
             <CopyButton text={AGENT_METRICS.ownerAddress} />
           </div>
         </div>
-        {wallet.connected && (
+        {auth.address && (
           <div className="glass rounded-xl p-2.5">
-            <div className="text-[10px] mb-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>Connected</div>
+            <div className="text-[10px] mb-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>
+              {auth.isEmailUser ? "Circle Wallet" : "Connected"}
+            </div>
             <div className="flex items-center text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.6)" }}>
-              {truncateAddress(wallet.address)}
-              <CopyButton text={wallet.address} />
+              {truncateAddress(auth.address)}
+              <CopyButton text={auth.address} />
             </div>
           </div>
         )}
@@ -203,6 +471,9 @@ function AgentSidebar({ wallet }: { wallet: WalletState }) {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Chat Components
+// ──────────────────────────────────────────────────────────────────────────────
 function ChatMessage({ message }: { message: Message }) {
   const isAgent = message.role === "agent";
   return (
@@ -221,11 +492,7 @@ function ChatMessage({ message }: { message: Message }) {
         </div>
       )}
       <div
-        className={`max-w-[78%] rounded-2xl px-4 py-3 ${
-          isAgent
-            ? "glass rounded-tl-sm"
-            : "rounded-tr-sm"
-        }`}
+        className={`max-w-[78%] rounded-2xl px-4 py-3 ${isAgent ? "glass rounded-tl-sm" : "rounded-tr-sm"}`}
         style={
           isAgent
             ? { background: "rgba(255,255,255,0.04)" }
@@ -279,46 +546,16 @@ function TypingIndicator() {
   );
 }
 
-async function callBackendAgent(userMessage: string): Promise<string> {
-  const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, "");
-  try {
-    const res = await fetch(`${baseUrl}/api/agent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: userMessage }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data.response ?? "Task completed.";
-    }
-  } catch {
-    // fall through to mock
-  }
-
-  await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
-
-  const lc = userMessage.toLowerCase();
-  if (lc.includes("balance")) {
-    return "On ARC-TESTNET, the address 0x8004...D9e holds 0.0142 ETH and the USDC contract is not yet deployed on this network. For ETH-SEPOLIA, use the check_balance tool with your wallet address.";
-  }
-  if (lc.includes("bridge") || lc.includes("usdc")) {
-    return "CCTP bridge simulation ready:\n\n• Route: ETH-SEPOLIA → ARC-TESTNET\n• Amount: 100 USDC\n• Est. fee: ~0.002 ETH\n• Est. time: ~2 minutes\n• Steps: Approve → Burn → Attestation → Mint\n\nTo execute this on-chain, connect your wallet and confirm the transaction sequence.";
-  }
-  if (lc.includes("audit") || lc.includes("contract")) {
-    return "Audit complete for 0x8004A818BFB912233c491871b3d84c89A494BD9e:\n\n✓ Risk Score: 95/100 — SAFE\n✓ ERC-8004 Compliant\n✓ Circle Infrastructure Verified\n✓ Source code verified on Arc Testnet\n\nNo critical findings. This is a known, audited ERC-8004 IdentityRegistry contract.";
-  }
-  if (lc.includes("wallet") || lc.includes("create")) {
-    return "Wallet creation requires CIRCLE_API_KEY to be configured. Once set, I can create a new SCA wallet on ETH-SEPOLIA or ARC-TESTNET via Circle's Developer-Controlled Wallets API. The wallet will be ready in under 10 seconds.";
-  }
-  return "I'm J14-75, your on-chain AI agent. I can check balances, simulate USDC bridges, audit contracts, and manage wallets. What would you like to do first?";
-}
-
+// ──────────────────────────────────────────────────────────────────────────────
+// Main App
+// ──────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [wallet, setWallet] = useState<WalletState>({ connected: false, address: "", chain: "" });
+  const [auth, setAuth] = useState<AuthState>({ mode: "none", address: "", isEmailUser: false });
   const [connecting, setConnecting] = useState(false);
+  const [showEmailPanel, setShowEmailPanel] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -326,6 +563,7 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
+  // ── Connect MetaMask / Rabby wallet ──────────────────────────────────────
   const connectWallet = useCallback(async () => {
     if (typeof window.ethereum === "undefined") {
       alert("No Web3 wallet detected. Install MetaMask or Rabby to connect.");
@@ -338,7 +576,7 @@ export default function App() {
       const chainName = chainId === "0xaa36a7" ? "ETH-SEPOLIA"
         : chainId === "0x13e31" ? "ARC-TESTNET"
         : `Chain ${chainId}`;
-      setWallet({ connected: true, address: accounts[0], chain: chainName });
+      setAuth({ mode: "wallet", address: accounts[0], chain: chainName, isEmailUser: false } as any);
     } catch (err: any) {
       console.error("Wallet connect error:", err);
     } finally {
@@ -346,6 +584,18 @@ export default function App() {
     }
   }, []);
 
+  // ── Email OTP success ─────────────────────────────────────────────────────
+  const onEmailSuccess = useCallback((walletAddress: string, email: string) => {
+    setAuth({ mode: "email", address: walletAddress, email, isEmailUser: true });
+    setShowEmailPanel(false);
+  }, []);
+
+  const signOut = useCallback(() => {
+    setAuth({ mode: "none", address: "", isEmailUser: false });
+    setMessages([]);
+  }, []);
+
+  // ── Send message to real backend ─────────────────────────────────────────
   const sendMessage = useCallback(async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || isTyping) return;
@@ -357,30 +607,60 @@ export default function App() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsTyping(true);
 
     try {
-      const response = await callBackendAgent(content);
-      const toolUsed = content.toLowerCase().includes("balance") ? "check_balance"
-        : content.toLowerCase().includes("bridge") ? "bridge_usdc"
-        : content.toLowerCase().includes("audit") ? "audit_contract"
-        : content.toLowerCase().includes("wallet") ? "manage_wallet"
-        : undefined;
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const walletAddress = auth.address || "0x0000000000000000000000000000000000000000";
+
+      const res = await fetch(`${baseUrl}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: content,
+          walletAddress,
+          isEmailUser: auth.isEmailUser,
+        }),
+      });
+
+      let reply = "J14-75 is processing your request.";
+      let toolUsed: string | undefined;
+
+      if (res.ok) {
+        const data = await res.json();
+        reply = data.reply ?? reply;
+        if (data.txHash) toolUsed = "on-chain";
+        else if (content.toLowerCase().includes("balance")) toolUsed = "check_balance";
+        else if (content.toLowerCase().includes("bridge")) toolUsed = "bridge_usdc";
+        else if (content.toLowerCase().includes("swap")) toolUsed = "kit.swap";
+        else if (content.toLowerCase().includes("audit") || content.toLowerCase().includes("contract")) toolUsed = "audit_contract";
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        reply = errData.reply ?? `⚠️ Agent error (${res.status}). Please try again.`;
+      }
 
       const agentMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "agent",
-        content: response,
+        content: reply,
         timestamp: new Date(),
         toolUsed,
       };
-      setMessages((prev) => [...prev, agentMsg]);
+      setMessages(prev => [...prev, agentMsg]);
+    } catch (err: any) {
+      const errMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "agent",
+        content: `⚠️ Connection error: ${err.message ?? "Could not reach the agent backend."}`,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, errMsg]);
     } finally {
       setIsTyping(false);
     }
-  }, [input, isTyping]);
+  }, [input, isTyping, auth]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -389,10 +669,13 @@ export default function App() {
     }
   };
 
+  const isConnected = auth.mode !== "none" && !!auth.address;
+
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden" style={{ background: "#000000" }}>
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header
-        className="flex items-center justify-between px-5 shrink-0"
+        className="flex items-center justify-between px-5 shrink-0 relative"
         style={{ height: 56, borderBottom: "1px solid rgba(255,255,255,0.06)" }}
       >
         <div className="flex items-center gap-3">
@@ -409,32 +692,71 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          {wallet.connected ? (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium"
-              style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", color: "#22c55e" }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }} />
-              <span className="font-mono">{truncateAddress(wallet.address)}</span>
-              <span className="opacity-60">·</span>
-              <span className="opacity-80">{wallet.chain}</span>
-            </motion.div>
+        <div className="flex items-center gap-2">
+          {isConnected ? (
+            <>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium"
+                style={{
+                  background: auth.isEmailUser ? "rgba(34,197,94,0.1)" : "rgba(34,197,94,0.1)",
+                  border: `1px solid ${auth.isEmailUser ? "rgba(255,107,0,0.3)" : "rgba(34,197,94,0.2)"}`,
+                  color: auth.isEmailUser ? "#FF6B00" : "#22c55e",
+                }}
+              >
+                {auth.isEmailUser ? <Mail size={11} /> : <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }} />}
+                {auth.isEmailUser
+                  ? <span className="truncate max-w-[100px]">{(auth as any).email ?? "Email user"}</span>
+                  : <span className="font-mono">{truncateAddress(auth.address)}</span>
+                }
+                {auth.isEmailUser && (
+                  <span className="text-[9px] px-1 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.2)", color: "#22c55e" }}>
+                    GASLESS
+                  </span>
+                )}
+              </motion.div>
+              <button
+                onClick={signOut}
+                className="p-1.5 rounded-lg opacity-40 hover:opacity-80 transition-opacity"
+                title="Sign out"
+              >
+                <LogOut size={13} />
+              </button>
+            </>
           ) : (
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={connectWallet}
-              disabled={connecting}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-60 transition-opacity"
-              style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}
-            >
-              <Wallet size={12} />
-              {connecting ? "Connecting..." : "Connect Wallet"}
-            </motion.button>
+            <>
+              {/* Email Sign In Button */}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => setShowEmailPanel(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-opacity"
+                style={{
+                  background: "rgba(255,107,0,0.1)",
+                  border: "1px solid rgba(255,107,0,0.25)",
+                  color: "#FF6B00",
+                }}
+              >
+                <Mail size={12} />
+                Email Sign In
+              </motion.button>
+
+              {/* Connect Wallet Button */}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={connectWallet}
+                disabled={connecting}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-60 transition-opacity"
+                style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}
+              >
+                <Wallet size={12} />
+                {connecting ? "Connecting..." : "Connect Wallet"}
+              </motion.button>
+            </>
           )}
+
           <a
             href="/command-center"
             target="_blank"
@@ -444,15 +766,46 @@ export default function App() {
             <ExternalLink size={13} />
           </a>
         </div>
+
+        {/* Email OTP Panel (dropdown) */}
+        <AnimatePresence>
+          {showEmailPanel && !isConnected && (
+            <EmailSignInPanel onSuccess={onEmailSuccess} onClose={() => setShowEmailPanel(false)} />
+          )}
+        </AnimatePresence>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <AgentSidebar wallet={wallet} />
+        <AgentSidebar auth={auth} />
 
+        {/* ── Main Chat ───────────────────────────────────────────────────── */}
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto px-5 pt-5" style={{ paddingBottom: 8 }}>
+            {messages.length === 0 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-col items-center justify-center h-full gap-3 pb-16"
+              >
+                <div
+                  className="w-16 h-16 rounded-2xl flex items-center justify-center"
+                  style={{ background: "linear-gradient(135deg, #FF6B00 0%, #FFB300 100%)" }}
+                >
+                  <span className="text-black font-black text-xl">J</span>
+                </div>
+                <div className="text-center">
+                  <div className="font-bold text-white text-base">J14-75 is ready</div>
+                  <div className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {isConnected
+                      ? "Ask me to check balances, transfer tokens, bridge USDC, or swap."
+                      : "Connect your wallet or sign in with email to get started."}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             <AnimatePresence mode="popLayout">
-              {messages.map((msg) => (
+              {messages.map(msg => (
                 <ChatMessage key={msg.id} message={msg} />
               ))}
               {isTyping && <TypingIndicator key="typing" />}
@@ -460,28 +813,8 @@ export default function App() {
             <div ref={bottomRef} />
           </div>
 
+          {/* ── Input area (no quick action chips) ────────────────────────── */}
           <div className="px-4 pb-4 pt-2 shrink-0">
-            <div className="flex items-center gap-2 mb-2.5 flex-wrap">
-              {QUICK_ACTIONS.map((action) => (
-                <motion.button
-                  key={action.label}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={() => sendMessage(action.prompt)}
-                  disabled={isTyping}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium disabled:opacity-40 transition-all"
-                  style={{
-                    background: "rgba(255,255,255,0.04)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    color: "rgba(255,255,255,0.65)",
-                  }}
-                >
-                  <action.icon size={11} style={{ color: "#FF6B00" }} />
-                  {action.label}
-                </motion.button>
-              ))}
-            </div>
-
             <div
               className="flex items-end gap-2 rounded-2xl p-2 pl-4"
               style={{
@@ -492,18 +825,22 @@ export default function App() {
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask J14-75 anything — check balance, bridge USDC, audit a contract..."
+                placeholder={
+                  isConnected
+                    ? "Ask J14-75 — check balance, transfer, bridge USDC, swap tokens..."
+                    : "Connect wallet or sign in with email to start..."
+                }
                 rows={1}
-                disabled={isTyping}
-                className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed py-1 disabled:opacity-50"
+                disabled={isTyping || !isConnected}
+                className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed py-1 disabled:opacity-40"
                 style={{
                   color: "rgba(255,255,255,0.85)",
                   maxHeight: 120,
                   caretColor: "#FF6B00",
                 }}
-                onInput={(e) => {
+                onInput={e => {
                   const t = e.currentTarget;
                   t.style.height = "auto";
                   t.style.height = Math.min(t.scrollHeight, 120) + "px";
@@ -513,7 +850,7 @@ export default function App() {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.93 }}
                 onClick={() => sendMessage()}
-                disabled={!input.trim() || isTyping}
+                disabled={!input.trim() || isTyping || !isConnected}
                 className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 disabled:opacity-30 transition-all"
                 style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}
               >
@@ -524,12 +861,13 @@ export default function App() {
             <div className="flex items-center justify-center mt-2 gap-1">
               <AlertTriangle size={10} style={{ color: "rgba(255,255,255,0.2)" }} />
               <span className="text-[10px]" style={{ color: "rgba(255,255,255,0.2)" }}>
-                Testnet only · No real funds · J14-75 is autonomous
+                Testnet only · Real on-chain execution via Arc App Kit · J14-75 is autonomous
               </span>
             </div>
           </div>
         </main>
 
+        {/* ── Right sidebar ─────────────────────────────────────────────────── */}
         <aside
           className="w-[180px] shrink-0 hidden lg:flex flex-col gap-3 py-5 px-4"
           style={{ borderLeft: "1px solid rgba(255,255,255,0.05)" }}
@@ -540,15 +878,12 @@ export default function App() {
 
           {[
             { icon: Wallet, label: "Wallet Mgmt", desc: "SCA wallets on Circle infra" },
-            { icon: BarChart3, label: "Balance Check", desc: "ETH + USDC on-chain" },
-            { icon: ArrowRightLeft, label: "CCTP Bridge", desc: "Cross-chain USDC transfer" },
-            { icon: Search, label: "Contract Audit", desc: "Security risk scoring" },
+            { icon: BarChart3, label: "Balance Check", desc: "Arc Testnet on-chain" },
+            { icon: ArrowRightLeft, label: "CCTP Bridge", desc: "Cross-chain USDC" },
+            { icon: Zap, label: "Swap Tokens", desc: "kit.swap() via KIT_KEY" },
             { icon: Shield, label: "KYC Verified", desc: "ERC-8004 validated" },
-          ].map((cap) => (
-            <div
-              key={cap.label}
-              className="glass rounded-xl p-3 flex flex-col gap-1"
-            >
+          ].map(cap => (
+            <div key={cap.label} className="glass rounded-xl p-3 flex flex-col gap-1">
               <div className="flex items-center gap-1.5">
                 <cap.icon size={11} style={{ color: "#FF6B00" }} />
                 <span className="text-[11px] font-semibold text-white">{cap.label}</span>
@@ -560,14 +895,11 @@ export default function App() {
           ))}
 
           <div className="mt-auto glass rounded-xl p-3 text-center">
-            <div className="text-[10px] mb-2" style={{ color: "rgba(255,255,255,0.3)" }}>Agent Score</div>
-            <div className="flex justify-center mb-1 relative">
-              <ScoreRing value={95} size={50} color="#FF6B00" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-xs font-bold" style={{ color: "#FF6B00" }}>95</span>
-              </div>
+            <div className="flex justify-center mb-1">
+              <ScoreRing value={AGENT_METRICS.reputation} size={44} />
             </div>
-            <div className="text-[10px]" style={{ color: "rgba(255,255,255,0.25)" }}>Reputation</div>
+            <div className="text-[10px] font-bold" style={{ color: "#FF6B00" }}>{AGENT_METRICS.reputation}/100</div>
+            <div className="text-[9px]" style={{ color: "rgba(255,255,255,0.3)" }}>Reputation</div>
           </div>
         </aside>
       </div>

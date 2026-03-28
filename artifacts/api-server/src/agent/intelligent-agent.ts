@@ -28,6 +28,7 @@ import {
   getOrCreateAgentWallet,
   appKitSend,
   appKitBridge,
+  appKitSwap,
   resolveChain,
 } from "../lib/app-kit.js";
 
@@ -80,6 +81,7 @@ export interface TaskContext {
   userAddress: string;
   message: string;
   chainId: number;
+  isEmailUser?: boolean; // true → Gas Station sponsorship enabled
 }
 
 export interface TaskResult {
@@ -96,8 +98,11 @@ interface AIAnalysis {
     addresses?: string[];
     amounts?: number[];
     tokens?: string[];
+    tokenIn?: string;
+    tokenOut?: string;
     toChain?: string;
     fromChain?: string;
+    swapChain?: string;
   };
   isScheduled: boolean;
   scheduleTrigger?: string | null;
@@ -196,21 +201,26 @@ export class IntelligentAgent {
 Output ONLY valid JSON. No markdown, no explanation.
 
 Rules:
-- Supported tokens: USDC (native), EURC (ERC-20)
-- Swap is NOT supported on Arc Testnet — if user asks to swap, return taskTypes: ["swap_unavailable"]
-- For bridge, extract toChain and fromChain
+- Supported tokens: USDC, EURC, USDT, and other ERC-20 tokens
+- Swap is supported via kit.swap() with a KIT_KEY — parse swap requests normally
+- For swap: extract tokenIn, tokenOut, amounts[0] as amountIn, swapChain (default "Ethereum" for mainnet swaps)
+- For bridge: extract toChain and fromChain
+- For transfer: extract addresses and amounts
 - addresses must be valid 0x hex strings
 - amounts must be numbers
 
 Output schema:
 {
-  "taskTypes": ["transfer"|"batch"|"bridge"|"query"|"impossible"|"swap_unavailable"],
+  "taskTypes": ["transfer"|"batch"|"bridge"|"swap"|"query"|"impossible"],
   "entities": {
     "addresses": [],
     "amounts": [],
     "tokens": [],
+    "tokenIn": null,
+    "tokenOut": null,
     "toChain": null,
-    "fromChain": null
+    "fromChain": null,
+    "swapChain": null
   },
   "isScheduled": false,
   "scheduleTrigger": null
@@ -238,12 +248,8 @@ Output schema:
   ): Promise<TaskResult> {
     const types = analysis.taskTypes;
 
-    if (types.includes("swap_unavailable") || types.includes("swap")) {
-      return {
-        success: false,
-        message:
-          "⚠️ Swap is not available on Arc Testnet (documented testnet limitation).\n\nSwap is only supported on mainnet chains. You can:\n• Transfer USDC or EURC directly\n• Bridge USDC from another chain to Arc Testnet",
-      };
+    if (types.includes("swap")) {
+      return this.executeSwap(analysis.entities, context);
     }
 
     if (types.includes("transfer") || types.includes("batch")) {
@@ -411,6 +417,68 @@ Output schema:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // SWAP — kit.swap() with KIT_KEY
+  // Swap is mainnet-only per Arc docs. We route swap requests to mainnet
+  // chains. The user should specify which chain (defaults to Ethereum mainnet).
+  // Gas Station policy is attached when isEmailUser=true.
+  // ─────────────────────────────────────────────────────────────────────────
+  private async executeSwap(
+    entities: AIAnalysis["entities"],
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const tokenIn = entities.tokenIn ?? entities.tokens?.[0] ?? "USDT";
+    const tokenOut = entities.tokenOut ?? entities.tokens?.[1] ?? "USDC";
+    const amountIn = entities.amounts?.[0];
+    const swapChain = entities.swapChain ?? "Ethereum";
+
+    if (!amountIn) {
+      return {
+        success: false,
+        message: "❌ Swap requires an amount. Example: 'Swap 10 USDT for USDC on Ethereum'",
+      };
+    }
+
+    if (!process.env.KIT_KEY) {
+      return {
+        success: false,
+        message: "❌ KIT_KEY is not configured. Swap requires a Circle Kit Key from the Console.",
+      };
+    }
+
+    const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+
+    const gasSponsorPolicyId = context.isEmailUser
+      ? (process.env.GAS_STATION_POLICY_ID ?? undefined)
+      : undefined;
+
+    if (gasSponsorPolicyId) {
+      console.log(`⛽ Gas Station sponsorship enabled: policyId=${gasSponsorPolicyId}`);
+    }
+
+    console.log(`🔄 kit.swap(): ${amountIn} ${tokenIn} → ${tokenOut} on ${swapChain}`);
+    const { txHash, steps } = await appKitSwap({
+      circleAddress,
+      chain: swapChain,
+      tokenIn: tokenIn.toUpperCase(),
+      tokenOut: tokenOut.toUpperCase(),
+      amountIn: amountIn.toFixed(6),
+      gasSponsorPolicyId,
+    });
+
+    const stepSummary = steps
+      .map((s: any) => `  • ${s.name ?? "step"}: ${s.state ?? "?"} | ${s.txHash?.slice(0, 14) ?? "n/a"}`)
+      .join("\n");
+
+    const explorerUrl = txHash ? `https://etherscan.io/tx/${txHash}` : "";
+
+    return {
+      success: true,
+      message: `✅ Swap complete!\n• ${amountIn} ${tokenIn.toUpperCase()} → ${tokenOut.toUpperCase()} on ${swapChain}\n• TxHash: ${txHash}\n• Explorer: ${explorerUrl}${gasSponsorPolicyId ? "\n• ⛽ Gas sponsored via Circle Gas Station" : ""}\n\nSteps:\n${stepSummary}`,
+      txHash,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // General query — Groq answers conversationally
   // ─────────────────────────────────────────────────────────────────────────
   private async handleQuery(message: string): Promise<TaskResult> {
@@ -419,10 +487,9 @@ Output schema:
       messages: [
         {
           role: "system",
-          content: `You are J14-75, a Web3 AI assistant on Arc Testnet (chainId 5042002).
-You execute real on-chain transactions using the Arc App Kit.
-Capabilities: send USDC/EURC, bridge USDC cross-chain via CCTP.
-Limitation: swap is not supported on Arc Testnet.
+          content: `You are J14-75, a Web3 AI assistant powered by the Arc App Kit.
+You execute real on-chain transactions: send USDC/EURC on Arc Testnet, bridge USDC cross-chain via CCTP, and swap tokens on mainnet chains using kit.swap().
+Email-authenticated users get gas-sponsored transactions via Circle Gas Station.
 Never hallucinate transaction data. Be concise and helpful.`,
         },
         { role: "user", content: message },

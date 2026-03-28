@@ -347,7 +347,8 @@ export async function signAndBroadcastApproval(params: {
 // ──────────────────────────────────────────────────────────────────────────────
 // Blockscout / ArcscanAPI helpers
 // ──────────────────────────────────────────────────────────────────────────────
-const ARCSCAN_BASE = "https://testnet.arcscan.app/api/v2";
+// Global Blockscout gateway with Arc Testnet Chain ID (as specified in requirements)
+const ARCSCAN_BASE = "https://api.blockscout.com/5042002/api/v2";
 
 function getBlockscoutApiKey(): string | null {
   return process.env.BLOCKSCOUT_API_KEY ?? null;
