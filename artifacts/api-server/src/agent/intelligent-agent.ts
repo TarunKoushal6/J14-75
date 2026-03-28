@@ -1,1131 +1,659 @@
+/**
+ * J14-75 Intelligent Agent
+ *
+ * Flow:
+ *   1. Groq (llama-3.3-70b-versatile) → parses intent → JSON
+ *   2. Execution planner → maps intent to steps
+ *   3. Circle SDK → signs each raw EVM transaction (keys managed server-side)
+ *   4. Viem → broadcasts signed tx to Arc Testnet
+ *   5. Viem → waits for on-chain confirmation
+ *   6. Returns real txHash (no hallucinations, no mocking)
+ *
+ * Blockchain data:  ArcscanAPI (Blockscout) using BLOCKSCOUT_API_KEY env var
+ * AI model:         Groq llama-3.3-70b-versatile
+ * Chain:            Arc Testnet (chainId 5042002)
+ */
+
+import Groq from "groq-sdk";
 import {
-  createPublicClient,
-  http,
-  erc20Abi,
   parseUnits,
   formatUnits,
   Address,
+  erc20Abi,
+  encodeFunctionData,
+  serializeTransaction,
 } from "viem";
 import { arcTestnet } from "viem/chains";
-import Groq from "groq-sdk";
+import {
+  arcPublicClient,
+  getOrCreateCircleWallet,
+  getCircleClient,
+  signAndBroadcastTransfer,
+  signAndBroadcastApproval,
+  fetchTokenBalances,
+  fetchTransactionHistory,
+} from "../lib/circle-client.js";
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Groq client
+// ──────────────────────────────────────────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ==========================================
-// 💾 HARDCODED KNOWN TOKENS (NO INDEXER NEEDED)
-// ==========================================
+// ──────────────────────────────────────────────────────────────────────────────
+// Known tokens on Arc Testnet
+// ──────────────────────────────────────────────────────────────────────────────
 const KNOWN_TOKENS: Record<
   string,
-  { address: string; decimals: number; symbol: string; coingeckoId?: string }
+  { address: string; decimals: number; symbol: string }
 > = {
   USDC: {
-    address: "native", // USDC is native on Arc Testnet
+    address: "native",
     decimals: 18,
     symbol: "USDC",
-    coingeckoId: "usd-coin",
   },
   EURC: {
     address: process.env.ARC_EURC_ADDRESS || "EURC_NOT_DEPLOYED",
     decimals: 6,
     symbol: "EURC",
-    coingeckoId: "euro-coin",
   },
 };
 
-// ==========================================
-// 🔮 SCHEDULED TASK REGISTRY
-// ==========================================
-const scheduledTasks: Map<
+// ──────────────────────────────────────────────────────────────────────────────
+// Scheduled task registry (in-memory)
+// ──────────────────────────────────────────────────────────────────────────────
+const scheduledTasks = new Map<
   string,
   {
     id: string;
     type: string;
-    trigger: any;
-    action: any;
+    trigger: string;
+    steps: any[];
     status: "active" | "completed" | "failed";
     createdAt: Date;
   }
-> = new Map();
+>();
 
-interface TaskContext {
+// ──────────────────────────────────────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────────────────────────────────────
+export interface TaskContext {
   userAddress: string;
   message: string;
   chainId: number;
-  walletClient?: any;
 }
 
-interface TaskResult {
+export interface TaskResult {
   success: boolean;
   message: string;
   txHash?: string;
-  data?: any;
-  followUpActions?: string[];
   taskId?: string;
   isScheduled?: boolean;
 }
 
-interface TaskPlan {
-  steps: TaskStep[];
-  estimatedGas: bigint;
-  requirements: string[];
-  warnings: string[];
-  isScheduled?: boolean;
+interface AIAnalysis {
+  taskTypes: string[];
+  entities: {
+    addresses?: string[];
+    queryAddresses?: string[];
+    amounts?: number[];
+    tokens?: string[];
+    contractTypes?: string[];
+    toChain?: string;
+  };
+  isScheduled: boolean;
   scheduleTrigger?: string;
 }
 
-interface TaskStep {
-  id: string;
-  description: string;
-  action: string;
-  params: any;
-  dependencies: string[];
-  estimated_gas?: bigint;
-}
-
+// ──────────────────────────────────────────────────────────────────────────────
+// Main agent class
+// ──────────────────────────────────────────────────────────────────────────────
 export class IntelligentAgent {
-  private publicClient = createPublicClient({
-    chain: arcTestnet,
-    transport: http(),
-  });
-
+  // ────────────────────────────────────────────────────────────────────────────
+  // Entry point
+  // ────────────────────────────────────────────────────────────────────────────
   async processComplexTask(context: TaskContext): Promise<TaskResult> {
     try {
-      console.log("🤖 Analyzing task with Groq AI:", context.message);
+      console.log(`\n🤖 Agent processing: "${context.message}"`);
 
-      // Step 1 & 2: Analyze intent and extract entities using LLM
-      const aiAnalysis = await this.analyzeWithAI(context.message);
-      console.log("🔍 Groq Extracted Entities & Intent:", aiAnalysis);
-
-      const taskTypes = aiAnalysis.taskTypes || ["query"];
-      const entities = aiAnalysis.entities || {};
-      const isScheduled = aiAnalysis.isScheduled || false;
-      const scheduleTrigger = aiAnalysis.scheduleTrigger;
-
-      // Special handling for balance queries: use Blockscout API
+      // ── Fast-path: balance query ───────────────────────────────────────────
+      const msgLower = context.message.toLowerCase();
       if (
-        taskTypes.includes("query") &&
-        (context.message.toLowerCase().includes("balance") ||
-          context.message.toLowerCase().includes("token") ||
-          context.message.toLowerCase().includes("all token"))
+        msgLower.includes("balance") ||
+        msgLower.includes("how much") ||
+        (msgLower.includes("token") && !msgLower.includes("transfer"))
       ) {
-        console.log("💰 Balance query detected - fetching from Blockscout...");
-        const tokenList = await this.fetchAllTokensFromBlockscout(context.userAddress);
-        return {
-          success: true,
-          message: tokenList,
-        };
+        console.log("💰 Fast-path: balance query → ArcscanAPI");
+        const result = await fetchTokenBalances(context.userAddress);
+        return { success: true, message: result };
       }
 
-      // Special handling for transaction history queries: use ArcscanAPI
+      // ── Fast-path: transaction history ────────────────────────────────────
       if (
-        taskTypes.includes("query") &&
-        (context.message.toLowerCase().includes("history") ||
-          context.message.toLowerCase().includes("transaction") ||
-          context.message.toLowerCase().includes("recent"))
+        msgLower.includes("history") ||
+        msgLower.includes("transaction") ||
+        msgLower.includes("recent") ||
+        msgLower.includes("past tx")
       ) {
-        console.log("📜 Transaction history query detected - fetching from ArcscanAPI...");
-        const txHistory = await this.fetchTransactionHistory(context.userAddress);
-        return {
-          success: true,
-          message: txHistory,
-        };
+        console.log("📜 Fast-path: history query → ArcscanAPI");
+        const result = await fetchTransactionHistory(context.userAddress);
+        return { success: true, message: result };
       }
 
-      // Step 3: Create execution plan
-      const plan = await this.createExecutionPlan(taskTypes, entities, context, {
-        isScheduled,
-        scheduleTrigger,
-      });
-      console.log("📝 Execution plan:", plan);
+      // ── Step 1: Groq AI analysis ──────────────────────────────────────────
+      const analysis = await this.analyzeWithGroq(context.message);
+      console.log("🔍 Groq analysis:", JSON.stringify(analysis, null, 2));
 
-      // Step 4: Validate plan and check REAL on-chain requirements
-      const validation = await this.validatePlan(plan, context);
-      if (!validation.valid) {
+      // ── Step 2: Reject impossible tasks ───────────────────────────────────
+      if (analysis.taskTypes.includes("impossible")) {
         return {
           success: false,
-          message: `❌ Cannot execute task: ${validation.reasons.join(
-            ", "
-          )}. This task is impossible with current resources.`,
+          message:
+            "❌ This task is impossible with current Arc Testnet resources. Missing required contracts or tokens.",
         };
       }
 
-      // Step 5A: Handle scheduled tasks
-      if (isScheduled && scheduleTrigger) {
+      // ── Step 3: Handle scheduled tasks ────────────────────────────────────
+      if (analysis.isScheduled && analysis.scheduleTrigger) {
         const taskId = `task_${Date.now()}`;
         scheduledTasks.set(taskId, {
           id: taskId,
-          type: taskTypes[0],
-          trigger: scheduleTrigger,
-          action: plan.steps,
+          type: analysis.taskTypes[0] ?? "unknown",
+          trigger: analysis.scheduleTrigger,
+          steps: [],
           status: "active",
           createdAt: new Date(),
         });
-        console.log(`⏰ Scheduled task registered: ${taskId}`);
         return {
           success: true,
-          message: `⏰ Task scheduled successfully! ID: ${taskId}. Will execute when: ${scheduleTrigger}. You can check the status by asking about this task ID.`,
+          message: `⏰ Scheduled! ID: ${taskId}. Will execute when: ${analysis.scheduleTrigger}`,
           taskId,
           isScheduled: true,
         };
       }
 
-      // Step 5B: Execute plan in real-time with REAL wallet signing
-      if (context.walletClient && this.shouldExecute(taskTypes)) {
-        try {
-          const txHash = await this.executeTaskOnChain(plan, context);
-          return {
-            success: true,
-            message: `✅ Task executed successfully on Arc Testnet! Transaction: ${txHash}`,
-            txHash,
-            data: plan,
-          };
-        } catch (execError: any) {
-          return {
-            success: false,
-            message: `❌ Task execution failed: ${
-              execError instanceof Error
-                ? execError.message
-                : "Unknown error"
-            }. No state was changed on-chain.`,
-            data: plan,
-          };
-        }
-      }
-
-      // Return plan if no wallet or for preview
-      return {
-        success: true,
-        message: `Plan Ready! Here is what I will execute: \n\n${plan.steps
-          .map((s) => `✅ ${s.description}`)
-          .join("\n")}`,
-        data: plan,
-      };
-    } catch (error) {
-      console.error("Agent error:", error);
+      // ── Step 4: Route to executor ─────────────────────────────────────────
+      return await this.executeTask(analysis, context);
+    } catch (error: any) {
+      console.error("❌ Agent error:", error);
       return {
         success: false,
-        message: `🚨 Error processing task: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
+        message: `🚨 ${error instanceof Error ? error.message : "Unknown error"}`,
       };
     }
   }
 
-  // ==========================================
-  // 🧠 AI BRAIN: Powered by Groq (Llama 3.3-70B)
-  // ==========================================
-  private async analyzeWithAI(message: string) {
+  // ────────────────────────────────────────────────────────────────────────────
+  // Groq AI: parse intent → JSON
+  // ────────────────────────────────────────────────────────────────────────────
+  private async analyzeWithGroq(message: string): Promise<AIAnalysis> {
     const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `You are an advanced Web3 AI Planner operating on the Arc Testnet.
-Analyze the user's message and extract their intent, entities, and scheduling info into a STRICT JSON object.
+          content: `You are a Web3 AI intent parser for Arc Testnet (chainId 5042002).
+Analyze the user message and return STRICT JSON — no markdown, no extra text.
 
-CRITICAL RULES TO PREVENT HALLUCINATIONS:
-1. NEVER return txHash, block numbers, or fake transaction data in the response.
-2. If a task is IMPOSSIBLE (e.g., swap without DEX, bridge to non-existent chain), flag it with "taskTypes": ["impossible"].
-3. If the user asks about a task you cannot verify on-chain (e.g., "is my transaction confirmed?"), return "taskTypes": ["query"] instead of faking data.
-4. For scheduled tasks (time-based or price-based), return "isScheduled": true and describe the trigger clearly in "scheduleTrigger".
-5. For direct operations (transfer, swap, approve): use USDC or EURC only. For balance queries: any token is supported via Blockscout API.
-6. For token balance queries, extract the TARGET ADDRESS if different from the connected wallet.
-7. If a token address is missing or not deployed, flag it as requiring ARC_EURC_ADDRESS environment variable.
+CRITICAL RULES:
+1. NEVER hallucinate txHashes, block numbers, or balances.
+2. For impossible tasks (swap without DEX, unknown token), set taskTypes: ["impossible"].
+3. Only USDC (native, 18 dec) and EURC (ERC-20) exist on Arc Testnet.
+4. Addresses must start with 0x and be 42 characters.
+5. amounts must be decimal numbers (not strings).
 
-Required JSON format:
+Output format (all fields required):
 {
-  "taskTypes": ["swap" | "transfer" | "deploy" | "liquidity" | "batch" | "bridge" | "analyze" | "query" | "impossible"],
+  "taskTypes": ["transfer" | "swap" | "bridge" | "approve" | "batch" | "query" | "impossible"],
   "entities": {
-    "addresses": ["0x..."],
-    "queryAddresses": ["0x..."],
-    "amounts": [number],
-    "tokens": ["USDC", "EURC"],
-    "contractTypes": ["ERC20", "ERC721", "ERC1155"]
+    "addresses": [],
+    "queryAddresses": [],
+    "amounts": [],
+    "tokens": [],
+    "contractTypes": [],
+    "toChain": null
   },
   "isScheduled": false,
-  "scheduleTrigger": "when ETH hits $3000" or "in 5 minutes" or null
-}
-
-Rules:
-- If the user implies sending to multiple addresses, include both 'batch' and 'transfer' in taskTypes.
-- If an entity type is not mentioned, leave its array empty [].
-- ONLY output valid JSON. Do not include any markdown formatting or extra text.`,
+  "scheduleTrigger": null
+}`,
         },
         { role: "user", content: message },
       ],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" },
     });
 
-    return JSON.parse(completion.choices[0]?.message?.content || "{}");
-  }
-
-  // ==========================================
-  // 📦 BLOCKSCOUT API: Fetch all user tokens
-  // ==========================================
-  private async fetchAllTokensFromBlockscout(userAddress: string): Promise<string> {
-    if (!process.env.BLOCKSCOUT_API_KEY) {
-      return "⚠️ Blockscout API key not configured. Cannot fetch token list.";
-    }
-
+    const raw = completion.choices[0]?.message?.content ?? "{}";
     try {
-      // Use the correct Arc Testnet explorer URL
-      const url = `https://testnet.arcscan.app/api/v2/addresses/${userAddress}/tokens?apikey=proapi_cg35ok018tMducPVSOOFcAiTvrkQvQmpxysxsoNBYkpVtsozT3KHXPSYHwWtaJQJB_drNwvz`;
-
-      console.log(`📦 Fetching all tokens for ${userAddress} from ArcscanAPI...`);
-      const res = await fetch(url);
-
-      if (!res.ok) {
-        console.error(`ArcscanAPI HTTP error: ${res.status} ${res.statusText}`);
-        const text = await res.text().catch(() => "");
-        console.error("Response:", text.slice(0, 200));
-        throw new Error(`ArcscanAPI error: ${res.status} ${res.statusText}`);
-      }
-
-      const data = await res.json() as any;
-      // ArcscanAPI returns 'items' not 'result'
-      const tokens = data.items || data.result || [];
-
-      if (!tokens || tokens.length === 0) {
-        return `✅ Address has no tokens on Arc Testnet (new address or no token balance).`;
-      }
-
-      // Format token list with balances
-      const tokenList = tokens
-        .map((token: any) => {
-          try {
-            // Handle different API response formats
-            const tokenValue = token.value || token.token_value || "0";
-            const decimals = token.token?.decimals || token.decimals || 18;
-            const symbol = token.token?.symbol || token.symbol || "UNKNOWN";
-            const tokenAddr = token.token?.address || token.token_address || "0x0000";
-            
-            const balance = formatUnits(BigInt(tokenValue), parseInt(decimals.toString()));
-            const address = tokenAddr.slice(0, 6) || "0x????";
-            return `• ${symbol} (${address}...): ${balance}`;
-          } catch (e) {
-            console.error("Token parsing error:", e);
-            const symbol = token.token?.symbol || token.symbol || "Unknown";
-            return `• ${symbol}: Error parsing balance`;
-          }
-        })
-        .join("\n");
-
-      return `✅ Found ${tokens.length} token(s):\n${tokenList}`;
-    } catch (error: any) {
-      console.error("ArcscanAPI fetch error:", error);
-      return `⚠️ Failed to fetch tokens: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`;
+      return JSON.parse(raw) as AIAnalysis;
+    } catch {
+      console.error("Groq returned invalid JSON:", raw);
+      return {
+        taskTypes: ["query"],
+        entities: {},
+        isScheduled: false,
+      };
     }
   }
 
-  // ==========================================
-  // 📜 ARCSCAN API: Fetch transaction history
-  // ==========================================
-  private async fetchTransactionHistory(userAddress: string): Promise<string> {
-    try {
-      const apiKey = "proapi_cg35ok018tMducPVSOOFcAiTvrkQvQmpxysxsoNBYkpVtsozT3KHXPSYHwWtaJQJB_drNwvz";
-      const url = `https://testnet.arcscan.app/api/v2/addresses/${userAddress}/transactions?apikey=${apiKey}`;
+  // ────────────────────────────────────────────────────────────────────────────
+  // Task router
+  // ────────────────────────────────────────────────────────────────────────────
+  private async executeTask(
+    analysis: AIAnalysis,
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const { taskTypes, entities } = analysis;
 
-      console.log(`📜 Fetching transaction history for ${userAddress} from ArcscanAPI...`);
-      const res = await fetch(url);
-
-      if (!res.ok) {
-        console.error(`ArcscanAPI HTTP error: ${res.status} ${res.statusText}`);
-        const text = await res.text().catch(() => "");
-        console.error("Response:", text.slice(0, 200));
-        throw new Error(`ArcscanAPI error: ${res.status} ${res.statusText}`);
-      }
-
-      const data = await res.json() as any;
-      // ArcscanAPI returns 'items' not 'result'
-      const transactions = data.items || data.result || [];
-
-      if (!transactions || transactions.length === 0) {
-        return `✅ No transactions found for this address (address is new or has no activity).`;
-      }
-
-      // Format transactions with status, date, and hash
-      const txList = transactions
-        .slice(0, 10) // Show last 10 transactions
-        .map((tx: any) => {
-          try {
-            const timestamp = parseInt(tx.block_timestamp || tx.timestamp || "0");
-            const date = timestamp > 0 ? new Date(timestamp * 1000).toLocaleString() : "Unknown date";
-            const status = tx.result === "success" || tx.status === "ok" ? "✅" : "❌";
-            const hash = tx.hash || tx.transaction_hash;
-            const hashStr = hash ? hash.slice(0, 10) + "..." : "N/A";
-            const from = tx.from_address ? tx.from_address.slice(0, 6) + "..." : "0x0000...";
-            const to = tx.to_address ? tx.to_address.slice(0, 6) + "..." : "0x0000...";
-            return `${status} ${date} | ${hashStr} | ${from} → ${to}`;
-          } catch (e) {
-            console.error("Transaction parsing error:", e);
-            return `Error parsing transaction`;
-          }
-        })
-        .join("\n");
-
-      return `✅ Last ${Math.min(10, transactions.length)} transactions:\n${txList}`;
-    } catch (error: any) {
-      console.error("ArcscanAPI fetch error:", error);
-      return `⚠️ Failed to fetch transaction history: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`;
+    // ── TRANSFER ──────────────────────────────────────────────────────────────
+    if (taskTypes.includes("transfer")) {
+      return await this.executeTransfer(entities, context);
     }
+
+    // ── BATCH TRANSFER ────────────────────────────────────────────────────────
+    if (taskTypes.includes("batch")) {
+      return await this.executeBatch(entities, context);
+    }
+
+    // ── SWAP ──────────────────────────────────────────────────────────────────
+    if (taskTypes.includes("swap")) {
+      return await this.executeSwap(entities, context);
+    }
+
+    // ── BRIDGE ────────────────────────────────────────────────────────────────
+    if (taskTypes.includes("bridge")) {
+      return await this.executeBridge(entities, context);
+    }
+
+    // ── GENERAL QUERY (let Groq answer) ──────────────────────────────────────
+    return await this.handleGeneralQuery(context.message);
   }
 
-  // ==========================================
-  // 🔐 REAL ON-CHAIN BALANCE VALIDATION
-  // ==========================================
-  private async getTokenBalance(
+  // ────────────────────────────────────────────────────────────────────────────
+  // TRANSFER: single recipient
+  // ────────────────────────────────────────────────────────────────────────────
+  private async executeTransfer(
+    entities: AIAnalysis["entities"],
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const recipient = entities.addresses?.[0];
+    const amount = entities.amounts?.[0];
+    const token = entities.tokens?.[0]?.toUpperCase() ?? "USDC";
+
+    if (!recipient || !amount) {
+      return {
+        success: false,
+        message: "❌ Transfer requires a recipient address and an amount.",
+      };
+    }
+
+    const tokenInfo = KNOWN_TOKENS[token];
+    if (!tokenInfo) {
+      return {
+        success: false,
+        message: `❌ Unsupported token: ${token}. Only USDC and EURC are available on Arc Testnet.`,
+      };
+    }
+
+    if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
+      return {
+        success: false,
+        message:
+          "❌ EURC is not deployed yet. Set the ARC_EURC_ADDRESS environment variable.",
+      };
+    }
+
+    const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
+
+    // Validate balance
+    const balance = await this.getOnChainBalance(context.userAddress, token);
+    if (balance < amountWei) {
+      return {
+        success: false,
+        message: `❌ Insufficient ${token}. You have ${formatUnits(balance, tokenInfo.decimals)}, need ${amount}.`,
+      };
+    }
+
+    // Get / create Circle wallet
+    const { circleWalletId, circleAddress } = await getOrCreateCircleWallet(
+      context.userAddress
+    );
+
+    console.log(
+      `💸 Transferring ${amount} ${token} → ${recipient} via Circle wallet ${circleWalletId} (${circleAddress})`
+    );
+
+    const txHash = await signAndBroadcastTransfer({
+      circleWalletId,
+      from: circleAddress as Address,
+      to: recipient as Address,
+      amountWei,
+      isNative: tokenInfo.address === "native",
+      tokenAddress:
+        tokenInfo.address !== "native"
+          ? (tokenInfo.address as Address)
+          : undefined,
+    });
+
+    return {
+      success: true,
+      message: `✅ Transfer complete!\n• ${amount} ${token} → ${recipient}\n• TxHash: ${txHash}\n• Explorer: https://testnet.arcscan.app/tx/${txHash}`,
+      txHash,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // BATCH TRANSFER: multiple recipients
+  // ────────────────────────────────────────────────────────────────────────────
+  private async executeBatch(
+    entities: AIAnalysis["entities"],
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const recipients = entities.addresses ?? [];
+    const amounts = entities.amounts ?? [];
+    const token = entities.tokens?.[0]?.toUpperCase() ?? "USDC";
+
+    if (recipients.length === 0 || amounts.length === 0) {
+      return {
+        success: false,
+        message: "❌ Batch transfer requires recipient addresses and amounts.",
+      };
+    }
+
+    const tokenInfo = KNOWN_TOKENS[token];
+    if (!tokenInfo || tokenInfo.address === "EURC_NOT_DEPLOYED") {
+      return { success: false, message: `❌ Unsupported token: ${token}` };
+    }
+
+    const total = amounts.reduce((s, a) => s + a, 0);
+    const balance = await this.getOnChainBalance(context.userAddress, token);
+    const totalWei = parseUnits(total.toString(), tokenInfo.decimals);
+
+    if (balance < totalWei) {
+      return {
+        success: false,
+        message: `❌ Insufficient ${token}. Need ${total}, have ${formatUnits(balance, tokenInfo.decimals)}.`,
+      };
+    }
+
+    const { circleWalletId, circleAddress } = await getOrCreateCircleWallet(
+      context.userAddress
+    );
+
+    const txHashes: string[] = [];
+    const logs: string[] = [];
+
+    for (let i = 0; i < recipients.length; i++) {
+      const recipient = recipients[i];
+      const amount = amounts[i] ?? amounts[0];
+      const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
+
+      console.log(`📦 Batch [${i + 1}/${recipients.length}] → ${recipient} (${amount} ${token})`);
+
+      const txHash = await signAndBroadcastTransfer({
+        circleWalletId,
+        from: circleAddress as Address,
+        to: recipient as Address,
+        amountWei,
+        isNative: tokenInfo.address === "native",
+        tokenAddress:
+          tokenInfo.address !== "native"
+            ? (tokenInfo.address as Address)
+            : undefined,
+      });
+
+      txHashes.push(txHash);
+      logs.push(`  [${i + 1}] ${recipient.slice(0, 8)}... → ${amount} ${token} | ${txHash.slice(0, 14)}...`);
+    }
+
+    return {
+      success: true,
+      message: `✅ Batch complete! ${recipients.length} transfers executed:\n${logs.join("\n")}\n\nAll confirmed on Arc Testnet.`,
+      txHash: txHashes[txHashes.length - 1],
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // SWAP: requires ARC_DEX_ADDRESS env var
+  // ────────────────────────────────────────────────────────────────────────────
+  private async executeSwap(
+    entities: AIAnalysis["entities"],
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const dexAddress = process.env.ARC_DEX_ADDRESS;
+    if (!dexAddress) {
+      return {
+        success: false,
+        message:
+          "❌ Swap unavailable: DEX address not configured. Set ARC_DEX_ADDRESS environment variable to the DEX contract address on Arc Testnet.",
+      };
+    }
+
+    const fromToken = entities.tokens?.[0]?.toUpperCase() ?? "USDC";
+    const toToken = entities.tokens?.[1]?.toUpperCase() ?? "EURC";
+    const amount = entities.amounts?.[0];
+
+    if (!amount) {
+      return { success: false, message: "❌ Swap requires an amount." };
+    }
+
+    const fromInfo = KNOWN_TOKENS[fromToken];
+    const toInfo = KNOWN_TOKENS[toToken];
+
+    if (!fromInfo || !toInfo) {
+      return {
+        success: false,
+        message: `❌ Unsupported token pair: ${fromToken}/${toToken}. Arc Testnet supports USDC and EURC.`,
+      };
+    }
+
+    if (fromInfo.address === "EURC_NOT_DEPLOYED" || toInfo.address === "EURC_NOT_DEPLOYED") {
+      return { success: false, message: "❌ EURC not deployed. Set ARC_EURC_ADDRESS." };
+    }
+
+    const amountWei = parseUnits(amount.toString(), fromInfo.decimals);
+    const balance = await this.getOnChainBalance(context.userAddress, fromToken);
+
+    if (balance < amountWei) {
+      return {
+        success: false,
+        message: `❌ Insufficient ${fromToken}. Have ${formatUnits(balance, fromInfo.decimals)}, need ${amount}.`,
+      };
+    }
+
+    const { circleWalletId, circleAddress } = await getOrCreateCircleWallet(
+      context.userAddress
+    );
+
+    const txHashes: string[] = [];
+
+    // Step 1: Approve DEX to spend token (only for ERC-20, not native)
+    if (fromInfo.address !== "native") {
+      console.log(`🔐 Approving DEX ${dexAddress} to spend ${amount} ${fromToken}...`);
+      const approveTxHash = await signAndBroadcastApproval({
+        circleWalletId,
+        from: circleAddress as Address,
+        tokenAddress: fromInfo.address as Address,
+        spender: dexAddress as Address,
+        amountWei,
+      });
+      txHashes.push(approveTxHash);
+      console.log(`✅ Approval confirmed: ${approveTxHash}`);
+    }
+
+    // Step 2: Execute swap via DEX contract
+    const swapData = encodeFunctionData({
+      abi: [
+        {
+          type: "function",
+          name: "swap",
+          stateMutability: "nonpayable",
+          inputs: [
+            { name: "amountIn", type: "uint256" },
+            { name: "minAmountOut", type: "uint256" },
+            { name: "tokenIn", type: "address" },
+            { name: "tokenOut", type: "address" },
+            { name: "to", type: "address" },
+            { name: "deadline", type: "uint256" },
+          ],
+          outputs: [{ name: "amountOut", type: "uint256" }],
+        },
+      ] as any,
+      functionName: "swap",
+      args: [
+        amountWei,
+        0n,
+        fromInfo.address === "native" ? "0x0000000000000000000000000000000000000000" : (fromInfo.address as Address),
+        toInfo.address === "native" ? "0x0000000000000000000000000000000000000000" : (toInfo.address as Address),
+        circleAddress as Address,
+        BigInt(Math.floor(Date.now() / 1000) + 3600),
+      ] as any,
+    });
+
+    const nonce = await arcPublicClient.getTransactionCount({
+      address: circleAddress as Address,
+    });
+    const feeData = await arcPublicClient.estimateFeesPerGas().catch(() => ({
+      maxFeePerGas: 1_000_000_000n,
+      maxPriorityFeePerGas: 1_000_000_000n,
+    }));
+
+    const client = getCircleClient();
+
+    const unsignedSwapTx = {
+      chainId: arcTestnet.id,
+      nonce,
+      type: "eip1559" as const,
+      maxFeePerGas: feeData.maxFeePerGas ?? 1_000_000_000n,
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? 1_000_000_000n,
+      gas: 300_000n,
+      to: dexAddress as Address,
+      value: fromInfo.address === "native" ? amountWei : 0n,
+      data: swapData,
+    };
+
+    const serialized = serializeTransaction(unsignedSwapTx);
+    const signRes = await client.signTransaction({
+      walletId: circleWalletId,
+      rawTransaction: serialized,
+      memo: `Swap ${amount} ${fromToken} for ${toToken}`,
+    });
+
+    const signedTxHex = signRes.data?.signedTransaction;
+    if (!signedTxHex) throw new Error("Circle did not return signed swap tx.");
+
+    const swapTxHash = await arcPublicClient.sendRawTransaction({
+      serializedTransaction: signedTxHex as `0x${string}`,
+    });
+
+    const receipt = await arcPublicClient.waitForTransactionReceipt({
+      hash: swapTxHash,
+      timeout: 90_000,
+    });
+
+    if (receipt.status !== "success") {
+      throw new Error(`Swap reverted on Arc Testnet. txHash: ${swapTxHash}`);
+    }
+
+    txHashes.push(swapTxHash);
+
+    return {
+      success: true,
+      message: `✅ Swap complete!\n• ${amount} ${fromToken} → ${toToken}\n• TxHash: ${swapTxHash}\n• Explorer: https://testnet.arcscan.app/tx/${swapTxHash}`,
+      txHash: swapTxHash,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // BRIDGE: CCTP not fully deployed on Arc Testnet — explain clearly
+  // ────────────────────────────────────────────────────────────────────────────
+  private async executeBridge(
+    entities: AIAnalysis["entities"],
+    context: TaskContext
+  ): Promise<TaskResult> {
+    const token = entities.tokens?.[0]?.toUpperCase() ?? "USDC";
+    const toChain = entities.toChain ?? "unknown";
+    const amount = entities.amounts?.[0];
+
+    if (token !== "USDC") {
+      return {
+        success: false,
+        message: `❌ Only USDC can be bridged (via CCTP). ${token} bridging is not supported.`,
+      };
+    }
+
+    if (!process.env.CCTP_TOKEN_MESSENGER_ADDRESS) {
+      return {
+        success: false,
+        message: `⚠️ Bridge plan created but cannot execute: CCTP TokenMessenger contract address is required.\n\n• Amount: ${amount} USDC\n• From: Arc Testnet\n• To: ${toChain}\n\nSet CCTP_TOKEN_MESSENGER_ADDRESS environment variable to enable live bridging.`,
+      };
+    }
+
+    return {
+      success: false,
+      message: "❌ CCTP bridge integration requires additional contract deployment on Arc Testnet.",
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // General query: pass back to Groq for a plain answer
+  // ────────────────────────────────────────────────────────────────────────────
+  private async handleGeneralQuery(message: string): Promise<TaskResult> {
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content: `You are J14-75, a Web3 AI assistant running on Arc Testnet (chainId 5042002).
+You help users with DeFi tasks: transfer, swap, bridge, check balances, transaction history.
+Supported tokens: USDC (native, 18 dec), EURC (ERC-20).
+Never invent transaction hashes, balances, or block numbers.
+Keep responses concise and helpful.`,
+        },
+        { role: "user", content: message },
+      ],
+    });
+
+    return {
+      success: true,
+      message:
+        completion.choices[0]?.message?.content ??
+        "I can help you transfer tokens, check balances, view transaction history, swap tokens, and bridge USDC on Arc Testnet.",
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Real on-chain balance via viem (used for validation before tx)
+  // ────────────────────────────────────────────────────────────────────────────
+  private async getOnChainBalance(
     userAddress: string,
     token: string
   ): Promise<bigint> {
     const tokenInfo = KNOWN_TOKENS[token];
     if (!tokenInfo)
-      throw new Error(`Token ${token} not in predefined list. Use "check balance" to see all available tokens via Blockscout.`);
-
-    try {
-      if (tokenInfo.address === "native") {
-        console.log(`📊 Fetching native ${token} balance for ${userAddress}...`);
-        const balance = await this.publicClient.getBalance({
-          address: userAddress as Address,
-        });
-        console.log(`   ✅ ${token} Balance: ${formatUnits(balance, 18)}`);
-        return balance;
-      } else if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
-        throw new Error(
-          `Token ${token} is not deployed on Arc Testnet. Set ARC_EURC_ADDRESS environment variable.`
-        );
-      } else {
-        console.log(
-          `📊 Fetching ${token} balance (contract: ${tokenInfo.address}) for ${userAddress}...`
-        );
-        const balance = await this.publicClient.readContract({
-          address: tokenInfo.address as Address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [userAddress as Address],
-        });
-        console.log(
-          `   ✅ ${token} Balance: ${formatUnits(
-            balance as bigint,
-            tokenInfo.decimals
-          )}`
-        );
-        return balance as bigint;
-      }
-    } catch (error: any) {
-      const errorMsg =
-        error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Failed to fetch ${token} balance: ${errorMsg}. Ensure ARC_EURC_ADDRESS is set correctly if using EURC.`
+        `Token ${token} not supported. Only USDC and EURC are on Arc Testnet.`
       );
-    }
-  }
 
-  // ==========================================
-  // 💰 REAL WALLET EXECUTION (NO MOCKING)
-  // ==========================================
-  private async executeTaskOnChain(
-    plan: TaskPlan,
-    context: TaskContext
-  ): Promise<string> {
-    if (!context.walletClient) throw new Error("No wallet client available");
-
-    const allTxHashes: string[] = [];
-    const executionLog: Array<{ step: string; txHash: string }> = [];
-
-    // ✅ STRICT SEQUENTIAL LOOP: Execute ALL steps
-    for (const step of plan.steps) {
-      if (!["transfer", "swap", "approve", "deploy", "batchTransfer", "bridge"].includes(step.action)) {
-        console.log(`⏭️  Skipping ${step.action}: ${step.description}`);
-        continue;
-      }
-
-      console.log(`\n📝 Executing step: ${step.id} (${step.action})`);
-      let stepTxHash: string | undefined;
-
-      try {
-        // ==========================================
-        // SINGLE TRANSFER
-        // ==========================================
-        if (step.action === "transfer") {
-          const { recipient, amount, token = "USDC" } = step.params;
-          const tokenInfo = KNOWN_TOKENS[token];
-          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-
-          const balance = await this.getTokenBalance(context.userAddress, token);
-          if (balance < amountWei) {
-            throw new Error(
-              `Insufficient ${token} balance. You have ${formatUnits(
-                balance,
-                tokenInfo.decimals
-              )}, but need ${amount}`
-            );
-          }
-
-          console.log(`💸 Sending ${amount} ${token} to ${recipient}...`);
-          stepTxHash = await context.walletClient.sendTransaction({
-            account: context.userAddress,
-            to: recipient,
-            value: tokenInfo.address === "native" ? amountWei : undefined,
-          });
-        }
-
-        // ==========================================
-        // BATCH TRANSFER
-        // ==========================================
-        else if (step.action === "batchTransfer") {
-          const { recipients, amounts, token = "USDC" } = step.params;
-          const tokenInfo = KNOWN_TOKENS[token];
-
-          const totalAmount = amounts.reduce((sum: number, a: number) => sum + a, 0);
-          const totalWei = parseUnits(totalAmount.toString(), tokenInfo.decimals);
-          const balance = await this.getTokenBalance(context.userAddress, token);
-          if (balance < totalWei) {
-            throw new Error(
-              `Insufficient ${token} balance for batch. You have ${formatUnits(
-                balance,
-                tokenInfo.decimals
-              )}, but need ${totalAmount}`
-            );
-          }
-
-          console.log(`📦 Batch transferring ${token} to ${recipients.length} recipients...`);
-          for (let i = 0; i < recipients.length; i++) {
-            const recipient = recipients[i];
-            const amount = amounts[i] || amounts[0];
-            const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-
-            console.log(
-              `  [${i + 1}/${recipients.length}] → ${recipient} (${amount} ${token})`
-            );
-            const batchTxHash = await context.walletClient.sendTransaction({
-              account: context.userAddress,
-              to: recipient,
-              value: tokenInfo.address === "native" ? amountWei : undefined,
-            });
-
-            console.log(`  ⏳ Waiting for receipt...`);
-            const receipt = await this.publicClient.waitForTransactionReceipt({
-              hash: batchTxHash as Address,
-              timeout: 60_000,
-            });
-            if (receipt.status !== "success") {
-              throw new Error(`Batch tx ${i} reverted: ${batchTxHash}`);
-            }
-            console.log(`  ✅ Confirmed: ${batchTxHash}`);
-            allTxHashes.push(batchTxHash);
-            executionLog.push({
-              step: `batch[${i}]`,
-              txHash: batchTxHash,
-            });
-          }
-          continue;
-        }
-
-        // ==========================================
-        // APPROVE ERC-20
-        // ==========================================
-        else if (step.action === "approve") {
-          const { token, amount, spender } = step.params;
-          const tokenInfo = KNOWN_TOKENS[token];
-          if (!tokenInfo || tokenInfo.address === "native") {
-            throw new Error(`Cannot approve native token ${token}`);
-          }
-          if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
-            throw new Error(
-              `Token ${token} is not deployed on Arc Testnet (ARC_EURC_ADDRESS env var not set)`
-            );
-          }
-
-          const balance = await this.getTokenBalance(context.userAddress, token);
-          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-          if (balance < amountWei) {
-            throw new Error(
-              `Insufficient ${token} balance. You have ${formatUnits(
-                balance,
-                tokenInfo.decimals
-              )}, but need ${amount}`
-            );
-          }
-
-          console.log(`🔐 Approving ${amount} ${token} to ${spender}...`);
-          stepTxHash = await context.walletClient.writeContract({
-            account: context.userAddress,
-            address: tokenInfo.address as Address,
-            abi: erc20Abi,
-            functionName: "approve",
-            args: [spender as Address, amountWei],
-          });
-        }
-
-        // ==========================================
-        // SWAP (Real DEX interaction)
-        // ==========================================
-        else if (step.action === "swap") {
-          const { fromToken, toToken, amount, dexAddress } = step.params;
-          const tokenInfo = KNOWN_TOKENS[fromToken];
-          if (!tokenInfo) {
-            throw new Error(`Unsupported token: ${fromToken}`);
-          }
-
-          if (!dexAddress) {
-            throw new Error(
-              `Swap failed: No DEX address configured. Set ARC_DEX_ADDRESS environment variable.`
-            );
-          }
-
-          const balance = await this.getTokenBalance(context.userAddress, fromToken);
-          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-          if (balance < amountWei) {
-            throw new Error(
-              `Insufficient ${fromToken} balance. You have ${formatUnits(
-                balance,
-                tokenInfo.decimals
-              )}, but need ${amount}`
-            );
-          }
-
-          const toTokenInfo = KNOWN_TOKENS[toToken];
-          if (!toTokenInfo) {
-            throw new Error(`Unsupported token: ${toToken}`);
-          }
-
-          console.log(
-            `🔄 Swapping ${amount} ${fromToken} for ${toToken} via DEX: ${dexAddress}...`
-          );
-
-          // Generic swap with common DEX interface
-          // Note: The actual ABI depends on the specific DEX implementation
-          // This is a standard swap function signature used by most DEXes
-          stepTxHash = await context.walletClient.writeContract({
-            account: context.userAddress,
-            address: dexAddress as Address,
-            abi: [
-              {
-                type: "function",
-                name: "swap",
-                stateMutability: "nonpayable",
-                inputs: [
-                  { name: "amountIn", type: "uint256" },
-                  { name: "minAmountOut", type: "uint256" },
-                  { name: "path", type: "address[]", optional: true },
-                  { name: "to", type: "address", optional: true },
-                  { name: "deadline", type: "uint256", optional: true },
-                ],
-                outputs: [{ name: "amounts", type: "uint256[]", optional: true }],
-              },
-            ] as any,
-            functionName: "swap",
-            args: [amountWei, "0"] as any,
-          }).catch(() => {
-            // Fallback: Try alternative swap function signature
-            console.log(`   ⚠️  Standard swap failed, trying alternative signature...`);
-            return context.walletClient.writeContract({
-              account: context.userAddress,
-              address: dexAddress as Address,
-              abi: [
-                {
-                  type: "function",
-                  name: "swapExactTokensForTokens",
-                  stateMutability: "nonpayable",
-                  inputs: [
-                    { name: "amountIn", type: "uint256" },
-                    { name: "amountOutMin", type: "uint256" },
-                    { name: "path", type: "address[]" },
-                    { name: "to", type: "address" },
-                    { name: "deadline", type: "uint256" },
-                  ],
-                  outputs: [{ name: "amounts", type: "uint256[]" }],
-                },
-              ] as any,
-              functionName: "swapExactTokensForTokens",
-              args: [amountWei, "0", [tokenInfo.address, toTokenInfo.address], context.userAddress, BigInt(Date.now() + 3600000)] as any,
-            });
-          });
-        }
-
-        // ==========================================
-        // BRIDGE (CCTP bridge for USDC)
-        // ==========================================
-        else if (step.action === "bridge") {
-          const { toChain, amount, token } = step.params;
-          const tokenInfo = KNOWN_TOKENS[token];
-          const amountWei = parseUnits(amount.toString(), tokenInfo.decimals);
-
-          const balance = await this.getTokenBalance(context.userAddress, token);
-          if (balance < amountWei) {
-            throw new Error(
-              `Insufficient ${token} balance for bridge. You have ${formatUnits(
-                balance,
-                tokenInfo.decimals
-              )}, but need ${amount}`
-            );
-          }
-
-          // Only USDC bridges are supported via CCTP
-          if (token !== "USDC") {
-            throw new Error(
-              `Bridges are only supported for USDC on Arc Testnet. ${token} cannot be bridged.`
-            );
-          }
-
-          console.log(
-            `🌉 Initiating CCTP bridge of ${amount} USDC to ${toChain}...`
-          );
-
-          // Log bridge details (no actual execution without CCTP contract)
-          console.log(`   From: Arc Testnet`);
-          console.log(`   To: ${toChain}`);
-          console.log(`   Amount: ${amount} USDC`);
-          console.log(
-            `   ⚠️  Bridge execution requires full CCTP contract integration with recipient address and nonce.`
-          );
-
-          stepTxHash =
-            `bridge_pending_${Date.now()}_for_${toChain}`;
-          console.log(`   📋 Bridge queued (requires external CCTP provider for completion)`);
-        }
-
-        // ==========================================
-        // DEPLOY
-        // ==========================================
-        else if (step.action === "deploy") {
-          console.log(`🚀 Deploying contract...`);
-          throw new Error(
-            "Contract deployment requires Solidity compiler and artifact management. Not available in agent execution."
-          );
-        }
-
-        // ==========================================
-        // ✅ WAIT FOR RECEIPT
-        // ==========================================
-        if (stepTxHash) {
-          console.log(`⏳ Waiting for receipt for txHash: ${stepTxHash}`);
-          const receipt = await this.publicClient.waitForTransactionReceipt({
-            hash: stepTxHash as Address,
-            timeout: 60_000,
-          });
-
-          if (receipt.status !== "success") {
-            throw new Error(
-              `Transaction reverted on-chain. TxHash: ${stepTxHash}. Status: ${receipt.status}`
-            );
-          }
-
-          console.log(`✅ Step confirmed: ${stepTxHash}`);
-          allTxHashes.push(stepTxHash);
-          executionLog.push({
-            step: step.id,
-            txHash: stepTxHash,
-          });
-        }
-      } catch (stepError: any) {
-        console.error(`❌ Step ${step.id} failed:`, stepError.message);
-        throw new Error(
-          `Failed at step "${step.description}": ${
-            stepError instanceof Error ? stepError.message : String(stepError)
-          }`
-        );
-      }
+    if (tokenInfo.address === "native") {
+      return arcPublicClient.getBalance({ address: userAddress as Address });
     }
 
-    if (allTxHashes.length === 0) {
-      throw new Error("No transactions were executed in the plan");
+    if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
+      throw new Error("EURC not deployed — set ARC_EURC_ADDRESS.");
     }
 
-    console.log(`\n✅ All steps completed! Total txHashes: ${allTxHashes.length}`);
-    console.log("Execution log:", executionLog);
-
-    return allTxHashes[allTxHashes.length - 1];
-  }
-
-  private shouldExecute(taskTypes: string[]): boolean {
-    return taskTypes.some((t) =>
-      ["transfer", "swap", "approve", "deploy", "batch", "bridge"].includes(t)
-    );
-  }
-
-  // ==========================================
-  // PLANNER FUNCTIONS
-  // ==========================================
-
-  private async createExecutionPlan(
-    taskTypes: string[],
-    entities: Record<string, any>,
-    context: TaskContext,
-    scheduling?: { isScheduled?: boolean; scheduleTrigger?: string }
-  ): Promise<TaskPlan> {
-    // Reject impossible tasks
-    if (taskTypes.includes("impossible")) {
-      throw new Error(
-        "This task is impossible with current Arc Testnet resources. Check if required contracts or tokens are deployed."
-      );
-    }
-
-    if (taskTypes.includes("swap") && entities.tokens)
-      return await this.createSwapPlan(entities, context);
-    if (taskTypes.includes("transfer") && entities.addresses && entities.amounts)
-      return await this.createTransferPlan(entities, context);
-    if (taskTypes.includes("bridge") && entities.tokens)
-      return await this.createBridgePlan(entities, context);
-    if (taskTypes.includes("deploy") && entities.contractTypes)
-      return await this.createDeploymentPlan(entities, context);
-    if (taskTypes.includes("liquidity"))
-      return await this.createLiquidityPlan(entities, context);
-    if (taskTypes.includes("batch"))
-      return await this.createBatchPlan(entities, context);
-    if (taskTypes.includes("analyze"))
-      return await this.createAnalysisPlan(entities, context);
-
-    // Query/info request
-    return {
-      steps: [
-        {
-          id: "query",
-          description: "Process user query",
-          action: "respond",
-          params: { message: context.message },
-          dependencies: [],
-        },
-      ],
-      estimatedGas: 0n,
-      requirements: [],
-      warnings: [],
-    };
-  }
-
-  private async createSwapPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    const requirements = [
-      "Connected wallet",
-      "Sufficient token balance",
-      "DEX contract address (ARC_DEX_ADDRESS)",
-    ];
-    const warnings: string[] = [];
-
-    if (!process.env.ARC_DEX_ADDRESS) {
-      return {
-        steps: [],
-        estimatedGas: 0n,
-        requirements,
-        warnings: [
-          "⚠️ Swaps not available: DEX address not configured (set ARC_DEX_ADDRESS env var)",
-        ],
-      };
-    }
-
-    if (entities.amounts && entities.tokens && entities.tokens.length >= 2) {
-      const [fromToken, toToken] = entities.tokens;
-      const amount = entities.amounts[0];
-
-      const dexAddress = process.env.ARC_DEX_ADDRESS;
-
-      // Only approve if not native token
-      if (fromToken !== "USDC") {
-        steps.push({
-          id: "approve_token",
-          description: `Approve ${fromToken} spending to DEX`,
-          action: "approve",
-          params: { token: fromToken, amount, spender: dexAddress },
-          dependencies: [],
-          estimated_gas: 50000n,
-        });
-      }
-
-      steps.push({
-        id: "execute_swap",
-        description: `Swap ${amount} ${fromToken} for ${toToken}`,
-        action: "swap",
-        params: { fromToken, toToken, amount, dexAddress },
-        dependencies: fromToken !== "USDC" ? ["approve_token"] : [],
-        estimated_gas: 200000n,
-      });
-
-      warnings.push("⚠️ Swaps involve slippage and price impact");
-    }
-
-    return { steps, estimatedGas: 250000n, requirements, warnings };
-  }
-
-  private async createTransferPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    const requirements = [
-      "Connected wallet",
-      "Sufficient USDC balance",
-      "Valid recipient address",
-    ];
-    const warnings: string[] = [];
-
-    if (entities.addresses && entities.amounts) {
-      const recipient = entities.addresses[0];
-      const amount = entities.amounts[0];
-
-      if (entities.addresses.length > 1 || entities.amounts.length > 1) {
-        steps.push({
-          id: "batch_transfer",
-          description: `Batch transfer to ${entities.addresses.length} recipients`,
-          action: "batchTransfer",
-          params: {
-            recipients: entities.addresses,
-            amounts: entities.amounts,
-            token: "USDC",
-          },
-          dependencies: [],
-          estimated_gas: BigInt(100000 * entities.addresses.length),
-        });
-      } else {
-        steps.push({
-          id: "single_transfer",
-          description: `Transfer ${amount} USDC to ${recipient.slice(0, 6)}...`,
-          action: "transfer",
-          params: { recipient, amount, token: "USDC" },
-          dependencies: [],
-          estimated_gas: 65000n,
-        });
-      }
-
-      if (amount > 1000)
-        warnings.push(
-          "⚠️ Large transfer detected - please double-check recipient"
-        );
-    }
-
-    return {
-      steps,
-      estimatedGas: steps.reduce(
-        (sum, step) => sum + (step.estimated_gas || 0n),
-        0n
-      ),
-      requirements,
-      warnings,
-    };
-  }
-
-  private async createBridgePlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    const { fromChain = "ARC-TESTNET", toChain, amount, tokens } = entities;
-    const token = tokens?.[0] || "USDC";
-
-    steps.push({
-      id: "bridge_usdc",
-      description: `Bridge ${amount} ${token} from ${fromChain} to ${toChain}`,
-      action: "bridge",
-      params: { fromChain, toChain, amount, token },
-      dependencies: [],
-      estimated_gas: 150000n,
+    const balance = await arcPublicClient.readContract({
+      address: tokenInfo.address as Address,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [userAddress as Address],
     });
 
-    return {
-      steps,
-      estimatedGas: 150000n,
-      requirements: ["Connected wallet", `Sufficient ${token} balance`, "Bridge contract"],
-      warnings: [
-        "⚠️ Bridge operations take time to finalize",
-        "💡 Requires attestation on destination chain",
-      ],
-    };
+    return balance as bigint;
   }
 
-  private async createDeploymentPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-
-    if (entities.contractTypes) {
-      const contractType = entities.contractTypes[0].toUpperCase();
-      steps.push({
-        id: "deploy_contract",
-        description: `Deploy ${contractType} contract`,
-        action: "deploy",
-        params: { type: contractType },
-        dependencies: [],
-        estimated_gas: 2000000n,
-      });
-    }
-
-    return {
-      steps,
-      estimatedGas: 2100000n,
-      requirements: ["Connected wallet", "Sufficient gas (USDC)", "Valid contract code"],
-      warnings: [
-        "⚠️ Contract deployment is permanent",
-        "💡 Consider using verified templates",
-      ],
-    };
-  }
-
-  private async createLiquidityPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    steps.push({
-      id: "add_liquidity",
-      description: "Add liquidity to pool",
-      action: "addLiquidity",
-      params: { tokens: entities.tokens, amounts: entities.amounts },
-      dependencies: [],
-      estimated_gas: 300000n,
-    });
-
-    return {
-      steps,
-      estimatedGas: 300000n,
-      requirements: ["Connected wallet", "Token balances", "DEX approval"],
-      warnings: [
-        "⚠️ Impermanent loss risk",
-        "💡 Understand LP token mechanics",
-      ],
-    };
-  }
-
-  private async createBatchPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    if (entities.addresses && entities.amounts) {
-      steps.push({
-        id: "batch_operation",
-        description: `Execute batch operation for ${entities.addresses.length} transactions`,
-        action: "batch",
-        params: { operations: this.createBatchOperations(entities) },
-        dependencies: [],
-        estimated_gas: BigInt(80000 * entities.addresses.length),
-      });
-    }
-    return {
-      steps,
-      estimatedGas: BigInt(80000 * (entities.addresses?.length || 1)),
-      requirements: [
-        "Connected wallet",
-        "Sufficient balance for all operations",
-      ],
-      warnings: [
-        "⚠️ Batch operations cost more gas",
-        "💡 Review all recipients carefully",
-      ],
-    };
-  }
-
-  private async createAnalysisPlan(
-    entities: Record<string, any>,
-    context: TaskContext
-  ): Promise<TaskPlan> {
-    const steps: TaskStep[] = [];
-    if (entities.addresses) {
-      steps.push({
-        id: "analyze_address",
-        description: `Analyze address ${entities.addresses[0]}`,
-        action: "analyzeAddress",
-        params: { address: entities.addresses[0] },
-        dependencies: [],
-      });
-    }
-    steps.push({
-      id: "generate_report",
-      description: "Generate analysis report",
-      action: "report",
-      params: { type: "analysis" },
-      dependencies: ["analyze_address"],
-    });
-    return {
-      steps,
-      estimatedGas: 0n,
-      requirements: [],
-      warnings: [],
-    };
-  }
-
-  private createBatchOperations(entities: Record<string, any>): any[] {
-    const operations = [];
-    const addresses = entities.addresses || [];
-    const amounts = entities.amounts || [];
-    for (let i = 0; i < addresses.length; i++) {
-      operations.push({
-        type: "transfer",
-        to: addresses[i],
-        amount: amounts[i] || amounts[0] || 1,
-      });
-    }
-    return operations;
-  }
-
-  // ==========================================
-  // ✅ ENHANCED VALIDATION WITH REAL CHECKS
-  // ==========================================
-  private async validatePlan(
-    plan: TaskPlan,
-    context: TaskContext
-  ): Promise<{ valid: boolean; reasons: string[] }> {
-    const reasons: string[] = [];
-
-    if (!context.userAddress) {
-      reasons.push("Wallet not connected");
-      return { valid: false, reasons };
-    }
-
-    // PRE-CHECK: For transfers, validate real balance
-    const transferStep = plan.steps.find((s) => s.action === "transfer");
-    if (transferStep) {
-      try {
-        const amount = transferStep.params.amount || 0;
-        const token = transferStep.params.token || "USDC";
-        const balance = await this.getTokenBalance(context.userAddress, token);
-        const required = parseUnits(
-          amount.toString(),
-          KNOWN_TOKENS[token].decimals
-        );
-
-        if (balance < required) {
-          reasons.push(
-            `Insufficient ${token} balance. You have ${formatUnits(
-              balance,
-              KNOWN_TOKENS[token].decimals
-            )}, but need ${amount}`
-          );
-        }
-      } catch (err: any) {
-        reasons.push(`Balance check failed: ${err.message}`);
-      }
-    }
-
-    // PRE-CHECK: Validate tokens
-    const tokens = plan.steps
-      .flatMap((s) => [
-        s.params.token,
-        s.params.fromToken,
-        s.params.toToken,
-      ])
-      .filter(Boolean);
-
-    for (const token of tokens) {
-      if (!KNOWN_TOKENS[token]) {
-        reasons.push(
-          `Unsupported token: ${token}. Only USDC, EURC, ETH supported on Arc Testnet.`
-        );
-      }
-    }
-
-    return { valid: reasons.length === 0, reasons };
-  }
-
-  // ==========================================
-  // ⏰ SCHEDULED TASK MONITORING
-  // ==========================================
+  // ────────────────────────────────────────────────────────────────────────────
+  // Scheduled task accessors
+  // ────────────────────────────────────────────────────────────────────────────
   public getScheduledTask(taskId: string) {
     return scheduledTasks.get(taskId);
   }
@@ -1134,3 +662,4 @@ Rules:
     return Array.from(scheduledTasks.values());
   }
 }
+

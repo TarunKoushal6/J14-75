@@ -53,15 +53,33 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ### `artifacts/api-server` (`@workspace/api-server`)
 
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
+Express 5 API server with the J14-75 Intelligent Agent. The agent uses Circle SDK for key management and viem for Arc Testnet broadcasting.
 
 - Entry: `src/index.ts` — reads `PORT`, starts Express
 - App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
+- Routes: `src/routes/chat.ts` — POST `/api/chat` — main AI agent endpoint
+- Agent: `src/agent/intelligent-agent.ts` — Groq AI intent parser → Circle sign → viem broadcast
+- Circle service: `src/lib/circle-client.ts` — Circle SDK init, wallet management, sign+broadcast
+
+**Agent execution pipeline:**
+1. Groq `llama-3.3-70b-versatile` parses intent → strict JSON (no hallucinations)
+2. Fast-paths: balance/history queries → ArcscanAPI (Blockscout) directly
+3. Transfer/swap: viem validates on-chain balance, Circle SDK signs raw EIP-1559 tx, viem broadcasts to Arc Testnet, polls for real TxHash
+4. Blockscout data: uses `BLOCKSCOUT_API_KEY` env var; returns error if key is invalid
+
+**Circle SDK integration:**
+- Arc Testnet (chainId 5042002) is not on Circle's supported chain list
+- Solution: Circle creates/manages EVM wallets (ETH) → `signTransaction` signs hex-encoded EIP-1559 tx → viem broadcasts to Arc Testnet
+- Same EVM secp256k1 key format works on any EVM chain
+- No private keys stored in code — Circle manages entity secret encryption
+
+Secrets required:
+- `CIRCLE_API_KEY` — Circle Developer API key
+- `CIRCLE_ENTITY_SECRET` — Circle entity secret
+- `GROQ_API_KEY` — Groq API key
+- `BLOCKSCOUT_API_KEY` — ArcscanAPI key (Blockscout software)
+- `ARC_EURC_ADDRESS` (optional) — EURC ERC-20 contract address on Arc Testnet
+- `ARC_DEX_ADDRESS` (optional) — DEX contract address for swaps
 
 ### `lib/db` (`@workspace/db`)
 
