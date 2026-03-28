@@ -19,7 +19,6 @@
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
-    "groq-sdk": "^0.9.1",
     "viem": "^2.47.4"
   },
   "devDependencies": {

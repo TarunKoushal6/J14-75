@@ -2,12 +2,12 @@
  * J14-75 Intelligent Agent — powered by Arc App Kit
  *
  * Execution pipeline:
- *   1. Groq llama-3.3-70b-versatile  → parse user intent → strict JSON
- *   2. Fast-path shortcuts           → Blockscout API for balance/history
- *   3. App Kit send/bridge           → real on-chain execution
+ *   1. DeepSeek v3.2 API          → parse user intent → strict JSON
+ *   2. Fast-path shortcuts        → Blockscout API for balance/history
+ *   3. App Kit send/bridge        → real on-chain execution
  *      – kit.send()   for transfers on Arc Testnet
  *      – kit.bridge() for cross-chain USDC via CCTP
- *      – kit.swap()   NOT supported on Arc Testnet (documented testnet limitation)
+ *      – kit.swap()   for mainnet token swaps via kit.swap()
  *   4. Returns real txHash + Arcscan explorer URL (zero hallucinations)
  *
  * Adapter: @circle-fin/adapter-circle-wallets
@@ -16,8 +16,6 @@
  *
  * Blockchain data: ArcscanAPI (Blockscout) via BLOCKSCOUT_API_KEY env var
  */
-
-import Groq from "groq-sdk";
 import { formatUnits, parseUnits, Address, erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
 import { createPublicClient, http } from "viem";
@@ -39,9 +37,42 @@ import {
 } from "../lib/circle-client.js";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Groq
+// DeepSeek API Helper
 // ──────────────────────────────────────────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const DEEPSEEK_BASE_URL = "https://api-manager-tool--calebcaleb93621.replit.app/anmix/v1";
+
+async function callDeepSeek(
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  options?: { json_mode?: boolean }
+): Promise<string> {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    throw new Error("DEEPSEEK_API_KEY is not configured");
+  }
+
+  const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "deepseek-v3.2",
+      messages,
+      temperature: 0.3,
+      response_format: options?.json_mode ? { type: "json_object" } : undefined,
+    }),
+  });
+
+  if (!res.ok) {
+    const error = await res.text();
+    console.error("DeepSeek API error:", error);
+    throw new Error(`DeepSeek API error: ${res.status} ${error}`);
+  }
+
+  const data = await res.json() as any;
+  return data.choices?.[0]?.message?.content ?? "";
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Arc Testnet public client (for balance validation only)
@@ -145,9 +176,9 @@ export class IntelligentAgent {
         return { success: true, message: await fetchTransactionHistory(context.userAddress) };
       }
 
-      // ── Step 1: Groq intent parse ──────────────────────────────────────
+      // ── Step 1: DeepSeek intent parse ──────────────────────────────────────
       const analysis = await this.analyzeWithGroq(msg);
-      console.log("🔍 Groq:", JSON.stringify(analysis));
+      console.log("🔍 DeepSeek:", JSON.stringify(analysis));
 
       // ── Impossible tasks ───────────────────────────────────────────────
       if (analysis.taskTypes.includes("impossible")) {
@@ -188,13 +219,11 @@ export class IntelligentAgent {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Groq: parse intent to JSON
+  // DeepSeek: parse intent to JSON
   // ─────────────────────────────────────────────────────────────────────────
   private async analyzeWithGroq(message: string): Promise<AIAnalysis> {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" },
-      messages: [
+    const content = await callDeepSeek(
+      [
         {
           role: "system",
           content: `You are a Web3 intent parser for Arc Testnet (chainId 5042002).
@@ -228,13 +257,13 @@ Output schema:
         },
         { role: "user", content: message },
       ],
-    });
+      { json_mode: true }
+    );
 
     try {
-      return JSON.parse(
-        completion.choices[0]?.message?.content ?? "{}"
-      ) as AIAnalysis;
+      return JSON.parse(content) as AIAnalysis;
     } catch {
+      console.warn("DeepSeek JSON parse failed:", content);
       return { taskTypes: ["query"], entities: {}, isScheduled: false };
     }
   }
@@ -479,29 +508,36 @@ Output schema:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // General query — Groq answers conversationally
+  // General query — DeepSeek answers conversationally
   // ─────────────────────────────────────────────────────────────────────────
   private async handleQuery(message: string): Promise<TaskResult> {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role: "system",
-          content: `You are J14-75, a Web3 AI assistant powered by the Arc App Kit.
+    try {
+      const response = await callDeepSeek(
+        [
+          {
+            role: "system",
+            content: `You are J14-75, a Web3 AI assistant powered by the Arc App Kit.
 You execute real on-chain transactions: send USDC/EURC on Arc Testnet, bridge USDC cross-chain via CCTP, and swap tokens on mainnet chains using kit.swap().
 Email-authenticated users get gas-sponsored transactions via Circle Gas Station.
 Never hallucinate transaction data. Be concise and helpful.`,
-        },
-        { role: "user", content: message },
-      ],
-    });
+          },
+          { role: "user", content: message },
+        ]
+      );
 
-    return {
-      success: true,
-      message:
-        completion.choices[0]?.message?.content ??
-        "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
-    };
+      return {
+        success: true,
+        message:
+          response ||
+          "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
+      };
+    } catch (err: any) {
+      console.error("DeepSeek query error:", err);
+      return {
+        success: true,
+        message: "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
+      };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
