@@ -32,7 +32,6 @@ router.post("/", async (req, res) => {
       userAddress: walletAddress,
       message,
       chainId: 5042002, // Arc Testnet
-      walletClient: undefined, // Set on frontend if needed
     });
 
     // Log the result

@@ -53,25 +53,28 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ### `artifacts/api-server` (`@workspace/api-server`)
 
-Express 5 API server with the J14-75 Intelligent Agent. The agent uses Circle SDK for key management and viem for Arc Testnet broadcasting.
+Express 5 API server with the J14-75 Intelligent Agent. Uses Arc App Kit for real on-chain execution.
 
 - Entry: `src/index.ts` — reads `PORT`, starts Express
 - App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
 - Routes: `src/routes/chat.ts` — POST `/api/chat` — main AI agent endpoint
-- Agent: `src/agent/intelligent-agent.ts` — Groq AI intent parser → Circle sign → viem broadcast
-- Circle service: `src/lib/circle-client.ts` — Circle SDK init, wallet management, sign+broadcast
+- Agent: `src/agent/intelligent-agent.ts` — Groq intent parser → App Kit execution
+- App Kit: `src/lib/app-kit.ts` — Arc App Kit + Circle Wallets adapter (send/bridge)
+- Blockscout helpers: `src/lib/circle-client.ts` — ArcscanAPI balance/tx fetchers + legacy Circle SDK wallet creation
 
 **Agent execution pipeline:**
 1. Groq `llama-3.3-70b-versatile` parses intent → strict JSON (no hallucinations)
-2. Fast-paths: balance/history queries → ArcscanAPI (Blockscout) directly
-3. Transfer/swap: viem validates on-chain balance, Circle SDK signs raw EIP-1559 tx, viem broadcasts to Arc Testnet, polls for real TxHash
-4. Blockscout data: uses `BLOCKSCOUT_API_KEY` env var; returns error if key is invalid
+2. Fast-paths: balance/history → ArcscanAPI (Blockscout) directly, no Groq needed
+3. Transfer: `kit.send()` via `createCircleWalletsAdapter` → real txHash on Arc Testnet
+4. Bridge: `kit.bridge()` via `createCircleWalletsAdapter` → CCTP cross-chain USDC
+5. Swap: **NOT supported on Arc Testnet** (documented testnet limitation) → clear error message
 
-**Circle SDK integration:**
-- Arc Testnet (chainId 5042002) is not on Circle's supported chain list
-- Solution: Circle creates/manages EVM wallets (ETH) → `signTransaction` signs hex-encoded EIP-1559 tx → viem broadcasts to Arc Testnet
-- Same EVM secp256k1 key format works on any EVM chain
-- No private keys stored in code — Circle manages entity secret encryption
+**Arc App Kit integration (packages: `@circle-fin/app-kit`, `@circle-fin/adapter-circle-wallets`):**
+- `createCircleWalletsAdapter({ apiKey, entitySecret })` — no raw private keys; Circle manages key custody
+- `kit.send({ from: { adapter, chain: "Arc_Testnet", address }, to, amount, token })` — same-chain transfer
+- `kit.bridge({ from: { adapter, chain, address }, to: { adapter, chain, address }, amount })` — CCTP bridge
+- Chain alias for Arc Testnet: `"Arc_Testnet"` (chainId 5042002, explorer: testnet.arcscan.app)
+- Supported tokens: USDC (native, 18 dec), EURC (ERC-20, via ARC_EURC_ADDRESS env var)
 
 Secrets required:
 - `CIRCLE_API_KEY` — Circle Developer API key
@@ -79,7 +82,6 @@ Secrets required:
 - `GROQ_API_KEY` — Groq API key
 - `BLOCKSCOUT_API_KEY` — ArcscanAPI key (Blockscout software)
 - `ARC_EURC_ADDRESS` (optional) — EURC ERC-20 contract address on Arc Testnet
-- `ARC_DEX_ADDRESS` (optional) — DEX contract address for swaps
 
 ### `lib/db` (`@workspace/db`)
 

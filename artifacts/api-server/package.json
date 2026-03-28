@@ -9,6 +9,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@circle-fin/adapter-circle-wallets": "^1.2.2",
+    "@circle-fin/adapter-viem-v2": "^1.7.0",
+    "@circle-fin/app-kit": "^1.1.0",
     "@circle-fin/developer-controlled-wallets": "^7.3.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
