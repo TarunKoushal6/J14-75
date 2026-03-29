@@ -2,7 +2,7 @@
  * J14-75 Intelligent Agent — powered by Arc App Kit
  *
  * Execution pipeline:
- *   1. DeepSeek v3.2 API          → parse user intent → strict JSON
+ *   1. Qwen3-Coder-Next LLM       → parse user intent → strict JSON
  *   2. Fast-path shortcuts        → Blockscout API for balance/history
  *   3. App Kit send/bridge        → real on-chain execution
  *      – kit.send()   for transfers on Arc Testnet
@@ -37,27 +37,27 @@ import {
 } from "../lib/circle-client.js";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// DeepSeek API Helper
+// Qwen3-Coder-Next LLM API Helper
 // ──────────────────────────────────────────────────────────────────────────────
-const DEEPSEEK_BASE_URL = "https://api-manager-tool--calebcaleb93621.replit.app/anmix/v1";
+const QWEN_BASE_URL = "https://api-manager-tool--calebcaleb93621.replit.app/anmix/v1";
 
-async function callDeepSeek(
+async function callQwen(
   messages: Array<{ role: "system" | "user"; content: string }>,
   options?: { json_mode?: boolean }
 ): Promise<string> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = process.env.QWEN_API_KEY;
   if (!apiKey) {
-    throw new Error("DEEPSEEK_API_KEY is not configured");
+    throw new Error("QWEN_API_KEY is not configured");
   }
 
-  const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+  const res = await fetch(`${QWEN_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "deepseek-v3.2",
+      model: "qwen3-coder-next",
       messages,
       temperature: 0.3,
       response_format: options?.json_mode ? { type: "json_object" } : undefined,
@@ -66,8 +66,8 @@ async function callDeepSeek(
 
   if (!res.ok) {
     const error = await res.text();
-    console.error("DeepSeek API error:", error);
-    throw new Error(`DeepSeek API error: ${res.status} ${error}`);
+    console.error("Qwen API error:", error);
+    throw new Error(`Qwen API error: ${res.status} ${error}`);
   }
 
   const data = await res.json() as any;
@@ -176,9 +176,9 @@ export class IntelligentAgent {
         return { success: true, message: await fetchTransactionHistory(context.userAddress) };
       }
 
-      // ── Step 1: DeepSeek intent parse ──────────────────────────────────────
+      // ── Step 1: Qwen intent parse ──────────────────────────────────────
       const analysis = await this.analyzeWithGroq(msg);
-      console.log("🔍 DeepSeek:", JSON.stringify(analysis));
+      console.log("🔍 Qwen:", JSON.stringify(analysis));
 
       // ── Impossible tasks ───────────────────────────────────────────────
       if (analysis.taskTypes.includes("impossible")) {
@@ -219,10 +219,10 @@ export class IntelligentAgent {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // DeepSeek: parse intent to JSON
+  // Qwen: parse intent to JSON
   // ─────────────────────────────────────────────────────────────────────────
   private async analyzeWithGroq(message: string): Promise<AIAnalysis> {
-    const content = await callDeepSeek(
+    const content = await callQwen(
       [
         {
           role: "system",
@@ -263,7 +263,7 @@ Output schema:
     try {
       return JSON.parse(content) as AIAnalysis;
     } catch {
-      console.warn("DeepSeek JSON parse failed:", content);
+      console.warn("Qwen JSON parse failed:", content);
       return { taskTypes: ["query"], entities: {}, isScheduled: false };
     }
   }
@@ -508,11 +508,11 @@ Output schema:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // General query — DeepSeek answers conversationally
+  // General query — Qwen answers conversationally
   // ─────────────────────────────────────────────────────────────────────────
   private async handleQuery(message: string): Promise<TaskResult> {
     try {
-      const response = await callDeepSeek(
+      const response = await callQwen(
         [
           {
             role: "system",
@@ -532,7 +532,7 @@ Never hallucinate transaction data. Be concise and helpful.`,
           "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
       };
     } catch (err: any) {
-      console.error("DeepSeek query error:", err);
+      console.error("Qwen query error:", err);
       return {
         success: true,
         message: "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
