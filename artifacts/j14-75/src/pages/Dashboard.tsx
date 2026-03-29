@@ -5,7 +5,7 @@ import {
   Zap, Shield, Activity, Wallet, ArrowRightLeft, Search,
   Send, Copy, Check, ExternalLink, AlertTriangle,
   BarChart3, Lock, Globe, Cpu, ArrowLeft, ChevronDown, ChevronUp,
-  X, CheckCircle, Loader2, Mail, LogOut,
+  X, CheckCircle, Loader2, LogOut,
 } from "lucide-react";
 import {
   createPublicClient,
@@ -662,12 +662,7 @@ export default function Dashboard() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Email auth state ──────────────────────────────────────────────────────
-  const [showEmailPanel, setShowEmailPanel] = useState(false);
-  const [emailAuthStep, setEmailAuthStep] = useState<"idle" | "email_input" | "otp_input" | "loading" | "done" | "error">("idle");
-  const [emailAuthEmail, setEmailAuthEmail] = useState("");
-  const [emailAuthOtp, setEmailAuthOtp] = useState("");
-  const [emailAuthError, setEmailAuthError] = useState("");
+  // ── Email auth state (initialized from localStorage) ──────────────────────
   const [isEmailUser, setIsEmailUser] = useState(false);
 
   // ── Wallet connect ───────────────────────────────────────────────────────
@@ -709,58 +704,18 @@ export default function Dashboard() {
     }
   }, []);
 
-  // ── Email OTP flow ────────────────────────────────────────────────────────
-  const requestEmailOtp = useCallback(async (email: string) => {
-    if (!email.includes("@")) {
-      setEmailAuthError("Please enter a valid email address.");
-      return;
-    }
-    setEmailAuthError("");
-    setEmailAuthStep("loading");
-    try {
-      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-      const res = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      if (res.ok) {
-        setEmailAuthStep("otp_input");
-      } else {
-        const body = await res.json().catch(() => ({}));
-        setEmailAuthError(body.error ?? `Server error ${res.status}`);
-        setEmailAuthStep("error");
+  // ── Check for email auth from landing page ────────────────────────────────
+  useEffect(() => {
+    const emailAuth = localStorage.getItem("j1475-emailAuth");
+    if (emailAuth) {
+      try {
+        const { walletAddress, email, isEmailUser: emailUserFlag } = JSON.parse(emailAuth);
+        setWallet({ connected: true, address: walletAddress, chain: "ARC-TESTNET" });
+        setIsEmailUser(emailUserFlag);
+        localStorage.removeItem("j1475-emailAuth"); // consume it once
+      } catch (err) {
+        console.error("Failed to parse email auth from localStorage:", err);
       }
-    } catch (err: any) {
-      setEmailAuthError(err.message ?? "Failed to send OTP.");
-      setEmailAuthStep("error");
-    }
-  }, []);
-
-  const verifyEmailOtp = useCallback(async (email: string, otp: string) => {
-    setEmailAuthError("");
-    setEmailAuthStep("loading");
-    try {
-      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-      const res = await fetch(`${baseUrl}/api/auth/email/verify-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, otp }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWallet({ connected: true, address: data.walletAddress ?? "0x" + email.replace(/[^a-z0-9]/gi, "").padStart(40, "0").slice(0, 40), chain: "ARC-TESTNET" });
-        setIsEmailUser(true); // email user gets gas sponsorship
-        setEmailAuthStep("done");
-        setShowEmailPanel(false);
-      } else {
-        const body = await res.json().catch(() => ({}));
-        setEmailAuthError(body.error ?? "Invalid OTP. Please try again.");
-        setEmailAuthStep("otp_input");
-      }
-    } catch (err: any) {
-      setEmailAuthError(err.message ?? "Verification failed.");
-      setEmailAuthStep("otp_input");
     }
   }, []);
 
@@ -952,13 +907,6 @@ export default function Dashboard() {
           ) : (
             <div className="flex items-center gap-2">
               <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                onClick={() => setShowEmailPanel(v => !v)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold"
-                style={{ background: "rgba(255,107,0,0.1)", border: "1px solid rgba(255,107,0,0.25)", color: "#FF6B00" }}>
-                <Mail size={12} />
-                <span className="hidden sm:inline">Email</span>
-              </motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                 onClick={connectWallet} disabled={connecting}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-60"
                 style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>
@@ -969,77 +917,6 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Email OTP Panel */}
-          <AnimatePresence>
-            {showEmailPanel && !wallet.connected && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -8 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -8 }}
-                className="absolute top-12 right-4 z-50 w-72 rounded-2xl p-4 shadow-2xl"
-                style={{ background: "#0a0a0a", border: "1px solid rgba(255,107,0,0.2)", boxShadow: "0 0 40px rgba(255,107,0,0.08)" }}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Mail size={14} style={{ color: "#FF6B00" }} />
-                    <span className="text-sm font-semibold text-white">Email Sign In</span>
-                  </div>
-                  <button onClick={() => setShowEmailPanel(false)} className="text-white/30 hover:text-white/70 transition-colors text-lg leading-none">×</button>
-                </div>
-                <div className="text-[11px] mb-3" style={{ color: "rgba(255,255,255,0.4)" }}>
-                  Powered by Circle · Gasless wallet auto-created
-                </div>
-
-                {(emailAuthStep === "idle" || emailAuthStep === "email_input" || emailAuthStep === "loading") && (
-                  <form onSubmit={(e) => { e.preventDefault(); requestEmailOtp(emailAuthEmail); }} className="flex flex-col gap-2">
-                    <input
-                      type="email" value={emailAuthEmail} onChange={e => setEmailAuthEmail(e.target.value)}
-                      placeholder="your@email.com" disabled={emailAuthStep === "loading"}
-                      className="w-full rounded-xl px-3 py-2 text-sm outline-none disabled:opacity-50"
-                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.9)" }}
-                    />
-                    <motion.button
-                      whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                      type="submit" disabled={emailAuthStep === "loading" || !emailAuthEmail.includes("@")}
-                      className="w-full py-2 rounded-xl text-sm font-semibold text-black disabled:opacity-40 transition-opacity"
-                      style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>
-                      {emailAuthStep === "loading" ? "Sending..." : "Send Code"}
-                    </motion.button>
-                  </form>
-                )}
-
-                {emailAuthStep === "otp_input" && (
-                  <form onSubmit={(e) => { e.preventDefault(); verifyEmailOtp(emailAuthEmail, emailAuthOtp); }} className="flex flex-col gap-2">
-                    <div className="text-[11px] text-center" style={{ color: "rgba(255,255,255,0.5)" }}>
-                      Code sent to <span className="text-orange-400">{emailAuthEmail}</span>
-                    </div>
-                    <input
-                      type="text" inputMode="numeric" value={emailAuthOtp}
-                      onChange={e => setEmailAuthOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                      placeholder="Enter verification code"
-                      className="w-full rounded-xl px-3 py-2 text-sm text-center tracking-widest outline-none"
-                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,107,0,0.3)", color: "rgba(255,255,255,0.9)" }}
-                    />
-                    <motion.button
-                      whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                      type="submit" disabled={emailAuthOtp.trim().length < 4}
-                      className="w-full py-2 rounded-xl text-sm font-semibold text-black disabled:opacity-40"
-                      style={{ background: "linear-gradient(135deg, #FF6B00, #FFB300)" }}>
-                      Verify & Sign In
-                    </motion.button>
-                    <button
-                      type="button" onClick={() => setEmailAuthStep("idle")}
-                      className="text-[11px] text-center" style={{ color: "rgba(255,255,255,0.35)" }}>
-                      Try a different email
-                    </button>
-                  </form>
-                )}
-
-                {emailAuthError && (
-                  <div className="mt-2 text-[11px] text-red-400 text-center">{emailAuthError}</div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
       </header>
 

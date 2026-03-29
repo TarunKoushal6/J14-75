@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView } from "framer-motion";
 import { useLocation } from "wouter";
+import { Mail, X } from "lucide-react";
 import logoSrc from "/logo.png";
 
 const BASE_URL = import.meta.env.BASE_URL;
@@ -139,10 +140,77 @@ export default function Home() {
   const terminalSectionRef = useRef<HTMLDivElement>(null);
   const terminalIsInView = useInView(terminalSectionRef, { once: true, amount: 0.2 });
 
+  // Email auth state
+  const [showEmailPanel, setShowEmailPanel] = useState(false);
+  const [emailAuthStep, setEmailAuthStep] = useState<"idle" | "email_input" | "otp_input" | "loading" | "done" | "error">("idle");
+  const [emailAuthEmail, setEmailAuthEmail] = useState("");
+  const [emailAuthOtp, setEmailAuthOtp] = useState("");
+  const [emailAuthError, setEmailAuthError] = useState("");
+
   const act2Reveal = useScrollReveal(0.15);
   const act3Left = useScrollReveal(0.15);
   const act3Right = useScrollReveal(0.15);
   const footerReveal = useScrollReveal(0.5);
+
+  /* ── Email auth flow ── */
+  const requestEmailOtp = async (email: string) => {
+    if (!email.includes("@")) {
+      setEmailAuthError("Please enter a valid email address.");
+      return;
+    }
+    setEmailAuthError("");
+    setEmailAuthStep("loading");
+    try {
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const res = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (res.ok) {
+        setEmailAuthStep("otp_input");
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setEmailAuthError(body.error ?? `Server error ${res.status}`);
+        setEmailAuthStep("error");
+      }
+    } catch (err: any) {
+      setEmailAuthError(err.message ?? "Failed to send OTP.");
+      setEmailAuthStep("error");
+    }
+  };
+
+  const verifyEmailOtp = async (email: string, otp: string) => {
+    setEmailAuthError("");
+    setEmailAuthStep("loading");
+    try {
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const res = await fetch(`${baseUrl}/api/auth/email/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Store email auth state for Dashboard to pick up
+        localStorage.setItem("j1475-emailAuth", JSON.stringify({
+          walletAddress: data.walletAddress ?? "0x" + email.replace(/[^a-z0-9]/gi, "").padStart(40, "0").slice(0, 40),
+          email,
+          isEmailUser: true,
+        }));
+        setEmailAuthStep("done");
+        setShowEmailPanel(false);
+        navigate("/dashboard");
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setEmailAuthError(body.error ?? "Invalid OTP. Please try again.");
+        setEmailAuthStep("otp_input");
+      }
+    } catch (err: any) {
+      setEmailAuthError(err.message ?? "Verification failed.");
+      setEmailAuthStep("otp_input");
+    }
+  };
 
   /* ── Restore saved theme ── */
   useEffect(() => {
@@ -467,7 +535,7 @@ export default function Home() {
             <motion.button
               whileHover={{ scale: 1.04, boxShadow: "0 0 36px rgba(255,107,0,0.28), inset 0 0 20px rgba(255,107,0,0.08)" }}
               whileTap={{ scale: 0.97 }}
-              onClick={() => navigate("/dashboard")}
+              onClick={() => setShowEmailPanel(true)}
               style={{
                 cursor: "pointer",
                 padding: "1rem 2.5rem",
@@ -988,6 +1056,205 @@ export default function Home() {
           </div>
         </motion.div>
       </footer>
+
+      {/* Email OTP Panel */}
+      <AnimatePresence>
+        {showEmailPanel && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: -8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: -8 }}
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 999,
+              width: "90%",
+              maxWidth: 360,
+              borderRadius: 16,
+              padding: 24,
+              boxShadow: "0 0 60px rgba(255,107,0,0.2)",
+            }}
+            className="backdrop-blur-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                background: "#0a0a0a",
+                border: "1px solid rgba(255,107,0,0.2)",
+                borderRadius: 16,
+                padding: 24,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Mail size={16} style={{ color: "#FF6B00" }} />
+                  <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "white" }}>Email Sign In</span>
+                </div>
+                <button
+                  onClick={() => setShowEmailPanel(false)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(255,255,255,0.3)",
+                    cursor: "pointer",
+                    fontSize: "1.5rem",
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ fontSize: "0.7rem", marginBottom: 16, color: "rgba(255,255,255,0.4)" }}>
+                Powered by Circle · Gasless wallet auto-created
+              </div>
+
+              {(emailAuthStep === "idle" || emailAuthStep === "email_input" || emailAuthStep === "loading") && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    requestEmailOtp(emailAuthEmail);
+                  }}
+                  style={{ display: "flex", flexDirection: "column", gap: 12 }}
+                >
+                  <input
+                    type="email"
+                    value={emailAuthEmail}
+                    onChange={(e) => setEmailAuthEmail(e.target.value)}
+                    placeholder="your@email.com"
+                    disabled={emailAuthStep === "loading"}
+                    style={{
+                      width: "100%",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: "0.85rem",
+                      outline: "none",
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      color: "rgba(255,255,255,0.9)",
+                      opacity: emailAuthStep === "loading" ? 0.5 : 1,
+                    }}
+                  />
+                  <motion.button
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={emailAuthStep === "loading" || !emailAuthEmail.includes("@")}
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      color: "black",
+                      background: "linear-gradient(135deg, #FF6B00, #FFB300)",
+                      border: "none",
+                      cursor: "pointer",
+                      opacity: emailAuthStep === "loading" || !emailAuthEmail.includes("@") ? 0.4 : 1,
+                    }}
+                  >
+                    {emailAuthStep === "loading" ? "Sending..." : "Send Code"}
+                  </motion.button>
+                </form>
+              )}
+
+              {emailAuthStep === "otp_input" && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    verifyEmailOtp(emailAuthEmail, emailAuthOtp);
+                  }}
+                  style={{ display: "flex", flexDirection: "column", gap: 12 }}
+                >
+                  <div style={{ fontSize: "0.7rem", textAlign: "center", color: "rgba(255,255,255,0.5)" }}>
+                    Code sent to <span style={{ color: "#FF6B00" }}>{emailAuthEmail}</span>
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={emailAuthOtp}
+                    onChange={(e) => setEmailAuthOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                    placeholder="Enter verification code"
+                    style={{
+                      width: "100%",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: "0.85rem",
+                      textAlign: "center",
+                      letterSpacing: "0.15em",
+                      outline: "none",
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,107,0,0.3)",
+                      color: "rgba(255,255,255,0.9)",
+                    }}
+                  />
+                  <motion.button
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={emailAuthOtp.trim().length < 4}
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      color: "black",
+                      background: "linear-gradient(135deg, #FF6B00, #FFB300)",
+                      border: "none",
+                      cursor: "pointer",
+                      opacity: emailAuthOtp.trim().length < 4 ? 0.4 : 1,
+                    }}
+                  >
+                    Verify & Sign In
+                  </motion.button>
+                  <button
+                    type="button"
+                    onClick={() => setEmailAuthStep("idle")}
+                    style={{
+                      fontSize: "0.7rem",
+                      textAlign: "center",
+                      background: "none",
+                      border: "none",
+                      color: "rgba(255,255,255,0.35)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Try a different email
+                  </button>
+                </form>
+              )}
+
+              {emailAuthError && (
+                <div style={{ marginTop: 12, fontSize: "0.7rem", textAlign: "center", color: "#ff6b6b" }}>
+                  {emailAuthError}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Email panel backdrop */}
+      <AnimatePresence>
+        {showEmailPanel && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowEmailPanel(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.5)",
+              backdropFilter: "blur(4px)",
+              zIndex: 998,
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Responsive: stack on mobile */}
       <style>{`
