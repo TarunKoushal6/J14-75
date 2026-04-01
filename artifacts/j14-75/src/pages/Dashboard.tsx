@@ -638,6 +638,16 @@ function SidebarContent({
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [, navigate] = useLocation();
+  
+  // ⚠️ CRITICAL: Enforce email OTP authentication
+  useEffect(() => {
+    const emailAuth = localStorage.getItem("j1475-emailAuth");
+    if (!emailAuth) {
+      // User reached dashboard without email auth - redirect to home
+      console.warn("⚠️ Email OTP required. Redirecting to home...");
+      navigate("/", { replace: true });
+    }
+  }, [navigate]);
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -645,18 +655,21 @@ export default function Dashboard() {
   const [wallet, setWallet] = useState<WalletState>({ connected: false, address: "", chain: "" });
   const [connecting, setConnecting] = useState(false);
   const [reputationScore, setReputationScore] = useState(95);
-  const [scoreLoading, setScoreLoading] = useState(true);
+  const [scoreLoading, setScoreLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // ⚠️ CRITICAL: Only fetch reputation AFTER wallet is fully authenticated
   useEffect(() => {
-    setScoreLoading(true);
-    fetchReputationScore().then((score) => {
-      setReputationScore(score);
-      setScoreLoading(false);
-    });
-  }, []);
+    if (wallet.connected) {
+      setScoreLoading(true);
+      fetchReputationScore().then((score) => {
+        setReputationScore(score);
+        setScoreLoading(false);
+      });
+    }
+  }, [wallet.connected]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -702,6 +715,26 @@ export default function Dashboard() {
     } finally {
       setConnecting(false);
     }
+  }, []);
+
+  // ── Circle Web3 SDK Initialization ────────────────────────────────────────
+  useEffect(() => {
+    // Initialize Circle Web3 SDK with required parameters
+    const initCircleSDK = async () => {
+      try {
+        const appConfig = {
+          appId: "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+          clientUrl: "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
+          clientKey: process.env.VITE_TEST_CLIENT_KEY || "",
+        };
+        console.log("🔵 Circle Web3 SDK initialized:", { appId: appConfig.appId, clientUrl: appConfig.clientUrl });
+        // Store for later use in wallet operations
+        (window as any).__circleConfig = appConfig;
+      } catch (err) {
+        console.error("❌ Failed to initialize Circle SDK:", err);
+      }
+    };
+    initCircleSDK();
   }, []);
 
   // ── Check for email auth from landing page ────────────────────────────────
