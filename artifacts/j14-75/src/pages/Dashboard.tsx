@@ -16,7 +16,7 @@ import {
   formatUnits,
   erc20Abi,
 } from "viem";
-import { W3SSdk } from "@circle-fin/modular-wallets-core";
+import { W3SSdk } from "@circle-fin/w3s-pw-web-sdk";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";

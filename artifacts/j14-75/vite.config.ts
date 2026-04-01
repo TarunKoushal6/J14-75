@@ -28,6 +28,11 @@ if (!basePath) {
 
 export default defineConfig({
   base: basePath,
+  define: {
+    // Polyfill process for Circle SDK
+    "process.env": "{}",
+    "global": "globalThis",
+  },
   plugins: [
     react(),
     tailwindcss(),
