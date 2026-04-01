@@ -1,18 +1,19 @@
 /**
- * J14-75 Intelligent Agent — powered by Arc App Kit
+ * J14-75 Intelligent Agent — powered by Arc App Kit + DeepSeek LLM
  *
  * Execution pipeline:
- *   1. Replit Native LLM           → parse user intent → strict JSON
- *   2. App Kit send/bridge         → real on-chain execution
+ *   1. DeepSeek LLM                → parse user intent → strict JSON
+ *   2. Smart routing               → transfer/bridge/swap/query
+ *   3. App Kit send/bridge/swap    → real on-chain execution
  *      – kit.send()   for transfers on Arc Testnet
  *      – kit.bridge() for cross-chain USDC via CCTP
- *      – kit.swap()   for mainnet token swaps via kit.swap()
- *   3. Returns real txHash + Arcscan explorer URL (zero hallucinations)
- *   ⚠️  IMPORTANT: Never call Blockscout API until auth/wallet is 100% complete
+ *      – kit.swap()   for mainnet token swaps (Gas Station for email users)
+ *   4. Returns real txHash + explorer URL (zero hallucinations)
  *
  * Adapter: @circle-fin/adapter-circle-wallets
- *   – Circle Developer-Controlled Wallets (no raw private keys in code)
+ *   – Circle Developer-Controlled Wallets
  *   – CIRCLE_API_KEY + CIRCLE_ENTITY_SECRET env vars
+ *   – DeepSeek API for intent analysis (DEEPSEEK_API_KEY)
  */
 import { formatUnits, parseUnits, Address, erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
@@ -35,43 +36,47 @@ import {
 } from "../lib/circle-client.js";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Replit Native LLM API Helper
+// DeepSeek LLM API Helper (real working LLM)
 // ──────────────────────────────────────────────────────────────────────────────
-async function callReplit(
+async function callLLM(
   messages: Array<{ role: "system" | "user"; content: string }>,
   options?: { json_mode?: boolean }
 ): Promise<string> {
-  // Use Replit's built-in LLM inference via the internal API
-  const res = await fetch("https://api.replit.com/inference", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Replit-User-Agent": "J14-75-Agent",
-    },
-    body: JSON.stringify({
-      messages,
-      temperature: 0.3,
-      max_tokens: 2048,
-    }),
-  }).catch(async () => {
-    // Fallback: use a simple built-in parser for critical tasks
-    // This ensures the agent continues to work even if LLM is unavailable
-    console.warn("Replit LLM unavailable, using fallback parser");
-    return null;
-  });
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    console.error("❌ DEEPSEEK_API_KEY not configured");
+    return "";
+  }
 
-  if (res && res.ok) {
+  try {
+    const res = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages,
+        temperature: 0.3,
+        max_tokens: 2048,
+        response_format: options?.json_mode ? { type: "json_object" } : undefined,
+      }),
+    });
+
+    if (!res.ok) {
+      const error = await res.text();
+      console.error("❌ DeepSeek API error:", res.status, error);
+      return "";
+    }
+
     const data = await res.json() as any;
-    return data.content ?? data.choices?.[0]?.message?.content ?? "";
+    const content = data.choices?.[0]?.message?.content ?? "";
+    return content;
+  } catch (err: any) {
+    console.error("❌ LLM call error:", err.message);
+    return "";
   }
-
-  if (res && !res.ok) {
-    const error = await res.text();
-    console.error("Replit LLM error:", error);
-  }
-
-  // Return empty string on error (handler will use fallback logic)
-  return "";
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -176,9 +181,9 @@ export class IntelligentAgent {
         return { success: true, message: await fetchTransactionHistory(context.userAddress) };
       }
 
-      // ── Step 1: Qwen intent parse ──────────────────────────────────────
+      // ── Step 1: LLM intent parse ──────────────────────────────────────
       const analysis = await this.analyzeWithGroq(msg);
-      console.log("🔍 Qwen:", JSON.stringify(analysis));
+      console.log("🔍 Intent:", JSON.stringify(analysis));
 
       // ── Impossible tasks ───────────────────────────────────────────────
       if (analysis.taskTypes.includes("impossible")) {
@@ -219,10 +224,10 @@ export class IntelligentAgent {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Replit LLM: parse intent to JSON
+  // LLM: parse intent to JSON
   // ─────────────────────────────────────────────────────────────────────────
   private async analyzeWithGroq(message: string): Promise<AIAnalysis> {
-    const content = await callReplit(
+    const content = await callLLM(
       [
         {
           role: "system",
@@ -261,9 +266,18 @@ Output schema:
     );
 
     try {
-      return JSON.parse(content) as AIAnalysis;
-    } catch {
-      console.warn("Replit LLM JSON parse failed:", content);
+      if (!content || content.trim() === "") {
+        console.warn("⚠️ LLM returned empty response, treating as query");
+        return { taskTypes: ["query"], entities: {}, isScheduled: false };
+      }
+      const parsed = JSON.parse(content) as AIAnalysis;
+      // Ensure taskTypes is never empty
+      if (!parsed.taskTypes || parsed.taskTypes.length === 0) {
+        parsed.taskTypes = ["query"];
+      }
+      return parsed;
+    } catch (err) {
+      console.warn("⚠️ LLM JSON parse failed:", content);
       return { taskTypes: ["query"], entities: {}, isScheduled: false };
     }
   }
@@ -508,11 +522,11 @@ Output schema:
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // General query — Replit LLM answers conversationally
+  // General query — LLM answers conversationally
   // ─────────────────────────────────────────────────────────────────────────
   private async handleQuery(message: string): Promise<TaskResult> {
     try {
-      const response = await callReplit(
+      const response = await callLLM(
         [
           {
             role: "system",
@@ -532,7 +546,7 @@ Never hallucinate transaction data. Be concise and helpful.`,
           "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
       };
     } catch (err: any) {
-      console.error("Replit LLM query error:", err);
+      console.error("❌ LLM query error:", err);
       return {
         success: true,
         message: "I can send tokens, check balances, and bridge USDC on Arc Testnet. What would you like to do?",
