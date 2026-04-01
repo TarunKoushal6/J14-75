@@ -29,15 +29,7 @@ if (!basePath) {
 export default defineConfig({
   base: basePath,
   define: {
-    // Proper polyfill for process object (Circle SDK compatibility)
-    "process": {
-      env: {
-        NODE_ENV: JSON.stringify(process.env.NODE_ENV || "development"),
-      },
-      version: JSON.stringify("v0.0.0"),
-      browser: true,
-    },
-    "global": "globalThis",
+    "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV || "development"),
   },
   plugins: [
     react(),
