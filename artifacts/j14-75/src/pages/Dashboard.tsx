@@ -16,7 +16,6 @@ import {
   formatUnits,
   erc20Abi,
 } from "viem";
-import { W3SSdk } from "@circle-fin/w3s-pw-web-sdk";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";
@@ -737,6 +736,8 @@ export default function Dashboard() {
   useEffect(() => {
     const initW3SSdk = async () => {
       try {
+        // Lazy-load W3SSdk to avoid top-level import issues
+        const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk");
         const w3sSdk = new W3SSdk({
           appId: "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
           clientUrl: "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
