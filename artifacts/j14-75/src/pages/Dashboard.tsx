@@ -5,7 +5,7 @@ import {
   Zap, Shield, Activity, Wallet, ArrowRightLeft, Search,
   Send, Copy, Check, ExternalLink, AlertTriangle,
   BarChart3, Lock, Globe, Cpu, ArrowLeft, ChevronDown, ChevronUp,
-  X, CheckCircle, Loader2, LogOut,
+  X, CheckCircle, Loader2, LogOut, Mail,
 } from "lucide-react";
 import {
   createPublicClient,
@@ -16,6 +16,7 @@ import {
   formatUnits,
   erc20Abi,
 } from "viem";
+import { W3SSdk } from "@circle-fin/modular-wallets-core";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";
@@ -639,15 +640,6 @@ function SidebarContent({
 export default function Dashboard() {
   const [, navigate] = useLocation();
   
-  // ⚠️ CRITICAL: Enforce email OTP authentication
-  useEffect(() => {
-    const emailAuth = localStorage.getItem("j1475-emailAuth");
-    if (!emailAuth) {
-      // User reached dashboard without email auth - redirect to home
-      console.warn("⚠️ Email OTP required. Redirecting to home...");
-      navigate("/", { replace: true });
-    }
-  }, [navigate]);
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -737,29 +729,87 @@ export default function Dashboard() {
     initCircleSDK();
   }, []);
 
-  // ── Check for email auth from landing page ────────────────────────────────
+  // ── Real Circle W3SSdk initialization ─────────────────────────────────────
+  const [sdk, setSdk] = useState<any>(null);
+  const [circleAuthLoading, setCircleAuthLoading] = useState(false);
+  const [circleAuthError, setCircleAuthError] = useState("");
+
   useEffect(() => {
-    const emailAuth = localStorage.getItem("j1475-emailAuth");
-    if (emailAuth) {
+    const initW3SSdk = async () => {
       try {
-        const { walletAddress, email, isEmailUser: emailUserFlag } = JSON.parse(emailAuth);
-        setWallet({ connected: true, address: walletAddress, chain: "ARC-TESTNET" });
-        setIsEmailUser(emailUserFlag);
-        localStorage.removeItem("j1475-emailAuth"); // consume it once
-      } catch (err) {
-        console.error("Failed to parse email auth from localStorage:", err);
+        const w3sSdk = new W3SSdk({
+          appId: "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+          clientUrl: "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
+        });
+        setSdk(w3sSdk);
+        console.log("✅ Circle W3SSdk initialized");
+      } catch (err: any) {
+        console.error("❌ Failed to initialize W3SSdk:", err);
+        setCircleAuthError("SDK initialization failed");
       }
-    }
+    };
+    initW3SSdk();
   }, []);
+
+  // ── Email login handler (triggers Circle native OTP popup) ────────────────
+  const handleEmailLogin = useCallback(async (email: string) => {
+    if (!sdk) {
+      setCircleAuthError("SDK not ready");
+      return;
+    }
+
+    setCircleAuthLoading(true);
+    setCircleAuthError("");
+
+    try {
+      // Step 1: Backend validates email and returns Circle auth params
+      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+      const res = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server error ${res.status}`);
+      }
+
+      const data = await res.json();
+      const { userToken, encryptionKey, challengeId } = data;
+
+      if (!userToken || !encryptionKey || !challengeId) {
+        throw new Error("Backend missing required auth params");
+      }
+
+      // Step 2: Trigger Circle's native secure iframe (real OTP & PIN)
+      console.log("🔐 Triggering Circle native OTP popup...");
+      const result = await sdk.execute({
+        userToken,
+        encryptionKey,
+        challengeId,
+      });
+
+      // Step 3: Only logged in if sdk.execute() succeeds
+      if (result?.status === "success" && result?.walletId) {
+        setWallet({ connected: true, address: result.walletId, chain: "ARC-TESTNET" });
+        setIsEmailUser(true);
+        console.log("✅ Email user authenticated:", result.walletId);
+      } else {
+        throw new Error("Circle authentication failed or was cancelled");
+      }
+    } catch (err: any) {
+      console.error("Email login error:", err);
+      setCircleAuthError(err.message || "Authentication failed");
+    } finally {
+      setCircleAuthLoading(false);
+    }
+  }, [sdk]);
 
   const signOut = useCallback(() => {
     setWallet({ connected: false, address: "", chain: "" });
     setIsEmailUser(false);
     setMessages([]);
-    setEmailAuthStep("idle");
-    setEmailAuthEmail("");
-    setEmailAuthOtp("");
-    setEmailAuthError("");
   }, []);
 
   // ── Plan execution (real on-chain via viem walletClient) ─────────────────
@@ -939,6 +989,18 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="flex items-center gap-2">
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                onClick={async () => {
+                  const email = prompt("Enter your email:");
+                  if (email) await handleEmailLogin(email);
+                }}
+                disabled={circleAuthLoading || !sdk}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold disabled:opacity-60"
+                style={{ background: "rgba(255,107,0,0.1)", border: "1px solid rgba(255,107,0,0.25)", color: "#FF6B00" }}>
+                <Mail size={12} />
+                <span className="hidden sm:inline">{circleAuthLoading ? "Signing in..." : "Email"}</span>
+                <span className="sm:hidden">{circleAuthLoading ? "..." : "Email"}</span>
+              </motion.button>
               <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                 onClick={connectWallet} disabled={connecting}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-black disabled:opacity-60"
