@@ -800,7 +800,7 @@ export default function Dashboard() {
         throw new Error("Circle authentication failed or was cancelled");
       }
     } catch (err: any) {
-      console.error("Email login error:", err);
+      console.error("Email login error:", err); alert("Caught an error: " + err.message); 
       setCircleAuthError(err.message || "Authentication failed");
     } finally {
       setCircleAuthLoading(false);
