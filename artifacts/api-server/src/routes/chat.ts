@@ -9,6 +9,9 @@ const agent = new IntelligentAgent();
 // ── Route ─────────────────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
   const { message, walletAddress, isEmailUser = false, history = [] } = req.body as {
+    console.log("🔑 Wallet received from frontend:", walletAddress);
+console.log("📧 Is Email User (Gas Sponsored):", isEmailUser);
+console.log("📨 Full body:", JSON.stringify(req.body, null, 2));
     message: string;
     walletAddress?: string;
     isEmailUser?: boolean;
