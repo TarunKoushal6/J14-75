@@ -321,8 +321,9 @@ Output schema is same as before.`,
     }
 
     // Get the agent's Circle wallet
+        // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
-    console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
+    console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     // Validate total balance before attempting
     const totalAmount = amounts.reduce((s, a) => s + a, 0);
@@ -410,8 +411,9 @@ Output schema is same as before.`,
       };
     }
 
+        // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
-  console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
+    console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     // Validate balance if sending from Arc
     if (isArcSource) {
@@ -469,8 +471,9 @@ Output schema is same as before.`,
       };
     }
 
+        // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
-  console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
+    console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     const gasSponsorPolicyId = context.isEmailUser
       ? (process.env.GAS_STATION_POLICY_ID ?? undefined)
