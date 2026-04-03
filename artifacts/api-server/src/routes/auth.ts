@@ -161,22 +161,13 @@ router.post("/email/verify-otp", async (req, res) => {
       walletAddress = `0x${email.replace(/[^a-f0-9]/gi, "").padStart(40, "0")}`;
     }
 
-    otpSessions.delete(email.toLowerCase());
+        otpSessions.delete(email.toLowerCase());
 
-    console.log(`✅ Email auth fixed for ${email} → ${walletAddress}`);
+    console.log(`✅ Email auth verified for ${email} → ${walletAddress}`);
 
     res.json({
       success: true,
       walletAddress: walletAddress,
-      sessionToken: session.userToken,
-    });
-
-    otpSessions.delete(email.toLowerCase());
-
-    console.log(`✅ Email auth verified for ${email}, wallet: ${walletAddress}`);
-    res.json({
-      success: true,
-      walletAddress: walletAddress || `0x${email.replace(/[^a-f0-9]/gi, "").padStart(40, "0").slice(0, 40)}`,
       sessionToken: session.userToken,
     });
   } catch (err: any) {
