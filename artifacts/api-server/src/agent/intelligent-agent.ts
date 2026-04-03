@@ -569,14 +569,14 @@ Never hallucinate transaction data. Be concise and helpful.`,
       const required = parseUnits(requiredAmount.toString(), tokenInfo.decimals);
       const have = parseFloat(formatUnits(balance, tokenInfo.decimals));
 
-            if (balance < required) {
+                        if (balance < required) {
         throw new Error(
-          `❌ Insufficient ${token} balance.\n` +
+          `❌ Insufficient ${token} balance in your wallet.\n` +
           `You have ${have.toFixed(4)} ${token} but need ${requiredAmount}.\n\n` +
-          `Please fund your wallet: ${address}\n` +
-          `After funding, try again.`
+          `Please add funds to: ${address}\n` +
+          `After funding, try the transaction again.`
         );
-      }
+                      }
     } catch (err: any) {
       if (err.message?.includes("Insufficient")) throw err;
       console.warn(`⚠️ Balance check skipped: ${err.message}`);
