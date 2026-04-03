@@ -140,7 +140,7 @@ router.post("/email/verify-otp", async (req, res) => {
     // Verify OTP via Circle — POST /user/pin/restore (OTP is treated as PIN recovery code)
     // For Email OTP wallets, Circle uses the W3S Web SDK challenge flow.
     // Server-side we call the initialize endpoint with the OTP code.
-        // FIXED Email OTP - Simple and working version
+           // PERMANENT CLEAN FIX: Email OTP verify
     const verifyRes = await fetch(`${baseCircleUrl}/users/token`, {
       method: "POST",
       headers: {
@@ -161,9 +161,9 @@ router.post("/email/verify-otp", async (req, res) => {
       walletAddress = `0x${email.replace(/[^a-f0-9]/gi, "").padStart(40, "0")}`;
     }
 
-        otpSessions.delete(email.toLowerCase());
+    otpSessions.delete(email.toLowerCase());
 
-    console.log(`✅ Email auth verified for ${email} → ${walletAddress}`);
+    console.log(`✅ Email signin successful for ${email} → ${walletAddress}`);
 
     res.json({
       success: true,
