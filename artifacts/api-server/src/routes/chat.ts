@@ -8,15 +8,16 @@ const agent = new IntelligentAgent();
 
 // ── Route ─────────────────────────────────────────────────────────────────
 router.post("/", async (req, res) => {
-  const { message, walletAddress, isEmailUser = false, history = [] } = req.body as {
-    console.log("🔑 Wallet received from frontend:", walletAddress);
-console.log("📧 Is Email User (Gas Sponsored):", isEmailUser);
-console.log("📨 Full body:", JSON.stringify(req.body, null, 2));
+    const { message, walletAddress, isEmailUser = false, history = [] } = req.body as {
     message: string;
     walletAddress?: string;
     isEmailUser?: boolean;
     history?: Array<{ role: "user" | "agent"; content: string }>;
   };
+
+  console.log("🔑 Wallet received from frontend:", walletAddress);
+  console.log("📧 Is Email User (Gas Sponsored):", isEmailUser);
+  console.log("📨 Full body:", JSON.stringify(req.body, null, 2));
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "message is required" });
