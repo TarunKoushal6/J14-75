@@ -592,10 +592,12 @@ Never hallucinate transaction data. Be concise and helpful.`,
       const required = parseUnits(requiredAmount.toString(), tokenInfo.decimals);
       const have = parseFloat(formatUnits(balance, tokenInfo.decimals));
 
-      if (balance < required) {
+            if (balance < required) {
         throw new Error(
-          `Insufficient ${token} in agent wallet. Have ${have.toFixed(4)}, need ${requiredAmount}.\n` +
-            `Fund the agent wallet at: ${address}`
+          `❌ Insufficient ${token} balance.\n` +
+          `You have ${have.toFixed(4)} ${token} but need ${requiredAmount}.\n\n` +
+          `Please fund your wallet: ${address}\n` +
+          `After funding, try again.`
         );
       }
     } catch (err: any) {
