@@ -27,6 +27,8 @@ router.post("/", async (req, res) => {
 
   try {
     console.log(`\n🔄 Processing message from ${walletAddress}: "${message}"`);
+    console.log("🔑 User wallet received:", walletAddress);
+console.log("📧 Is email user?", isEmailUser);
 
     // Use the intelligent agent to process the task
     const result = await agent.processComplexTask({
@@ -58,7 +60,7 @@ router.post("/", async (req, res) => {
     
     res.status(statusCode).json({
       error: errorMsg,
-      reply: `⚠️ ${errorMsg}`,
+      reply: `⚠️ Error: ${errorMsg}. Check Circle wallet has funds & all secrets are set in Replit.`,
       success: false,
     });
   }
