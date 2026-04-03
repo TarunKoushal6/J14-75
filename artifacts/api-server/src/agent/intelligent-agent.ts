@@ -343,6 +343,7 @@ Output schema:
 
     // Get the agent's Circle wallet
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+    console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
 
     // Validate total balance before attempting
     const totalAmount = amounts.reduce((s, a) => s + a, 0);
@@ -431,6 +432,7 @@ Output schema:
     }
 
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+  console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
 
     // Validate balance if sending from Arc
     if (isArcSource) {
@@ -489,6 +491,7 @@ Output schema:
     }
 
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+  console.log(`✅ User wallet used: ${context.userAddress} → Circle: ${circleAddress}`);
 
     const gasSponsorPolicyId = context.isEmailUser
       ? (process.env.GAS_STATION_POLICY_ID ?? undefined)
