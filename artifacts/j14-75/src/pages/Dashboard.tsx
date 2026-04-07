@@ -280,6 +280,10 @@ function getStatusText(content: string): string {
   return "🪐 J14-75 processing...";
 }
 
+// ── API Base URL ──────────────────────────────────────────────────────────
+// Use environment variable for API URL, fallback to relative path for same-origin
+const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+
 // ── Backend chat call ──────────────────────────────────────────────────────
 async function callBackendChat(
   message: string,
@@ -287,8 +291,7 @@ async function callBackendChat(
   isEmailUser: boolean = false,
   history?: Array<{ role: "user" | "agent"; content: string }>
 ): Promise<{ reply: string; toolUsed?: string; txHash?: string; plan?: ExecutionPlan }> {
-  const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-  const res = await fetch(`${baseUrl}/api/chat`, {
+  const res = await fetch(`${API_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, walletAddress, isEmailUser, history }),
@@ -763,9 +766,8 @@ export default function Dashboard() {
     setCircleAuthError("");
 
     try {
-      // Step 1: Backend validates email and returns Circle auth params
-      const baseUrl = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-      const res = await fetch(`${baseUrl}/api/auth/email/send-otp`, {
+      // Step 1: Call backend to initiate email OTP flow
+      const res = await fetch(`${API_BASE_URL}/api/auth/email/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
@@ -777,31 +779,66 @@ export default function Dashboard() {
       }
 
       const data = await res.json();
-      const { userToken, encryptionKey, challengeId } = data;
+      const { userToken, encryptionKey, challengeId, existingWallet } = data;
+
+      // Handle existing wallet (already initialized user)
+      if (existingWallet?.address) {
+        setWallet({ connected: true, address: existingWallet.address, chain: "ARC-TESTNET" });
+        setIsEmailUser(true);
+        console.log("✅ Existing email user authenticated:", existingWallet.address);
+        return;
+      }
 
       if (!userToken || !encryptionKey || !challengeId) {
         throw new Error("Backend missing required auth params");
       }
 
-      // Step 2: Trigger Circle's native secure iframe (real OTP & PIN)
-      console.log("🔐 Triggering Circle native OTP popup...");
-      const result = await sdk.execute({
-        userToken,
-        encryptionKey,
-        challengeId,
+      // Step 2: Set authentication in SDK
+      console.log("🔐 Setting up Circle authentication...");
+      sdk.setAuthentication({ userToken, encryptionKey });
+
+      // Step 3: Execute the challenge (triggers OTP email + PIN setup)
+      console.log("🔐 Executing wallet initialization challenge...");
+      
+      const result = await new Promise<any>((resolve, reject) => {
+        sdk.execute(challengeId, (error: any, result: any) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        });
       });
 
-      // Step 3: Only logged in if sdk.execute() succeeds
-      if (result?.status === "success" && result?.walletId) {
-        setWallet({ connected: true, address: result.walletId, chain: "ARC-TESTNET" });
-        setIsEmailUser(true);
-        console.log("✅ Email user authenticated:", result.walletId);
+      // Step 4: User is now logged in - fetch wallet details
+      if (result?.status === "COMPLETE" || result?.status === "success") {
+        // Get user wallets from backend
+        const walletsRes = await fetch(`${API_BASE_URL}/api/auth/email/verify-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+
+        if (!walletsRes.ok) {
+          throw new Error("Failed to fetch wallet details");
+        }
+
+        const walletData = await walletsRes.json();
+        
+        if (walletData.walletAddress) {
+          setWallet({ connected: true, address: walletData.walletAddress, chain: "ARC-TESTNET" });
+          setIsEmailUser(true);
+          console.log("✅ Email user authenticated:", walletData.walletAddress);
+        } else {
+          throw new Error("No wallet address returned");
+        }
       } else {
         throw new Error("Circle authentication failed or was cancelled");
       }
     } catch (err: any) {
-      console.error("Email login error:", err); alert("Caught an error: " + err.message); 
+      console.error("Email login error:", err);
       setCircleAuthError(err.message || "Authentication failed");
+      alert("Email login error: " + err.message);
     } finally {
       setCircleAuthLoading(false);
     }
