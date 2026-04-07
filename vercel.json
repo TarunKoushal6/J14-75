@@ -32,5 +32,6 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  }
+  },
+  "pnpm_version": "10.3.0"
 }
