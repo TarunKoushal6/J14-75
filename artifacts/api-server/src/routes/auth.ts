@@ -18,6 +18,19 @@ import { Router } from "express";
 
 const router = Router();
 
+// Helper to clean API key (remove TEST_API_KEY: prefix if present)
+function cleanApiKey(apiKey: string | undefined): string {
+  if (!apiKey) return "";
+  const prefixes = ["TEST_API_KEY:", "LIVE_API_KEY:", "api_key:", "key:"];
+  let cleaned = apiKey.trim();
+  for (const prefix of prefixes) {
+    if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
+      cleaned = cleaned.slice(prefix.length);
+    }
+  }
+  return cleaned.trim();
+}
+
 // ── POST /api/auth/email/send-otp ──────────────────────────────────────────
 router.post("/email/send-otp", async (req, res) => {
   const { email } = req.body as { email?: string };
@@ -28,7 +41,8 @@ router.post("/email/send-otp", async (req, res) => {
   }
 
   try {
-    const apiKey = process.env.CIRCLE_API_KEY;
+    const rawApiKey = process.env.CIRCLE_API_KEY;
+    const apiKey = cleanApiKey(rawApiKey);
     if (!apiKey) {
       throw new Error("CIRCLE_API_KEY is not configured.");
     }
@@ -181,7 +195,8 @@ router.post("/email/verify-otp", async (req, res) => {
   }
 
   try {
-    const apiKey = process.env.CIRCLE_API_KEY;
+    const rawApiKey = process.env.CIRCLE_API_KEY;
+    const apiKey = cleanApiKey(rawApiKey);
     if (!apiKey) throw new Error("CIRCLE_API_KEY is not configured.");
 
     const baseCircleUrl = "https://api.circle.com/v1/w3s";

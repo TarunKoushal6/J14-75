@@ -24,17 +24,38 @@ export const arcPublicClient = createPublicClient({
 // ──────────────────────────────────────────────────────────────────────────────
 let circleClient: ReturnType<typeof initiateDeveloperControlledWalletsClient> | null = null;
 
+// Helper to clean API key (remove TEST_API_KEY: prefix if present)
+function cleanApiKey(apiKey: string | undefined): string {
+  if (!apiKey) return "";
+  // Remove common prefixes that might be added
+  const prefixes = ["TEST_API_KEY:", "LIVE_API_KEY:", "api_key:", "key:"];
+  let cleaned = apiKey.trim();
+  for (const prefix of prefixes) {
+    if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
+      cleaned = cleaned.slice(prefix.length);
+    }
+  }
+  return cleaned.trim();
+}
+
 export function getCircleClient() {
   if (circleClient) return circleClient;
 
-  const apiKey = process.env.CIRCLE_API_KEY;
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
+  // Clean the API key to remove any prefixes
+  const rawApiKey = process.env.CIRCLE_API_KEY;
+  const apiKey = cleanApiKey(rawApiKey);
+  const entitySecret = process.env.CIRCLE_ENTITY_SECRET || process.env.CIRCLE_ENTITY_KEY;
 
   if (!apiKey || !entitySecret) {
+    console.error("❌ Missing Circle credentials:");
+    console.error("  CIRCLE_API_KEY:", rawApiKey ? "[set but may be invalid]" : "[not set]");
+    console.error("  CIRCLE_ENTITY_SECRET/CIRCLE_ENTITY_KEY:", entitySecret ? "[set]" : "[not set]");
     throw new Error(
       "CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET environment variables are required for Circle SDK."
     );
   }
+
+  console.log("🔑 Using Circle API Key:", apiKey.slice(0, 8) + "..." + apiKey.slice(-4));
 
   circleClient = initiateDeveloperControlledWalletsClient({
     apiKey,
