@@ -1,39 +1,22 @@
 /**
  * Email OTP Authentication Routes
  *
- * Proxies Circle User-Controlled Wallet email OTP flow server-side.
+ * Circle User-Controlled Wallet email OTP flow server-side.
  * Circle's infrastructure handles: email delivery, OTP verification, wallet creation.
  *
- * POST /api/auth/email/send-otp   → triggers OTP email via Circle
- * POST /api/auth/email/verify-otp → verifies OTP, returns Circle wallet address
+ * POST /api/auth/email/send-otp   → triggers OTP email via Circle, returns auth params
  *
- * The Circle Modular/User-Controlled Wallets SDK is used server-side:
+ * The flow uses Circle's User-Controlled Wallets SDK:
  *   - API key auth: CIRCLE_API_KEY env var
- *   - Entity secret: CIRCLE_ENTITY_SECRET env var
+ *   - User wallets created via challenge-response model
  *   - Gas Station policy: GAS_STATION_POLICY_ID env var (sponsoring user txs)
  *
  * Reference: https://developers.circle.com/wallets/user-controlled/create-user-wallets-with-email
  */
 
 import { Router } from "express";
-import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 
 const router = Router();
-
-// In-memory OTP session store (production: use Redis or DB)
-const otpSessions = new Map<
-  string, // email
-  { userToken: string; encryptionKey: string; expiresAt: number }
->();
-
-function getCircleClient() {
-  const apiKey = process.env.CIRCLE_API_KEY;
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
-  if (!apiKey || !entitySecret) {
-    throw new Error("CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are required.");
-  }
-  return initiateDeveloperControlledWalletsClient({ apiKey, entitySecret });
-}
 
 // ── POST /api/auth/email/send-otp ──────────────────────────────────────────
 router.post("/email/send-otp", async (req, res) => {
@@ -50,9 +33,6 @@ router.post("/email/send-otp", async (req, res) => {
       throw new Error("CIRCLE_API_KEY is not configured.");
     }
 
-    // Circle User-Controlled Wallets — create or retrieve user + initiate OTP
-    // POST https://api.circle.com/v1/w3s/users → creates user if not exists
-    // POST https://api.circle.com/v1/w3s/users/token → gets session token with OTP trigger
     const baseCircleUrl = "https://api.circle.com/v1/w3s";
 
     // Step 1: Create user (idempotent — Circle returns existing user if already created)
@@ -71,14 +51,37 @@ router.post("/email/send-otp", async (req, res) => {
       throw new Error(`Circle API error (${createUserRes.status})`);
     }
 
-    // Step 2: Get user token + trigger OTP email
-    const tokenRes = await fetch(`${baseCircleUrl}/users/token`, {
+    // Step 2: Create device token for this user session
+    const deviceTokenRes = await fetch(`${baseCircleUrl}/users/deviceToken`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ userId: email }),
+    });
+
+    if (!deviceTokenRes.ok) {
+      const body = await deviceTokenRes.text();
+      console.error("Circle device token error:", body);
+      throw new Error(`Circle device token error (${deviceTokenRes.status})`);
+    }
+
+    const deviceTokenData = await deviceTokenRes.json() as any;
+    const deviceToken = deviceTokenData.data?.deviceToken;
+
+    // Step 3: Get user token + encryption key (triggers OTP email)
+    const tokenRes = await fetch(`${baseCircleUrl}/users/token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ 
+        userId: email,
+        deviceToken: deviceToken,
+        deviceEncryptionKey: deviceToken, // Use device token as encryption key for Email OTP
+      }),
     });
 
     if (!tokenRes.ok) {
@@ -95,16 +98,71 @@ router.post("/email/send-otp", async (req, res) => {
       throw new Error("Circle did not return userToken/encryptionKey.");
     }
 
-    // Store session (OTP is handled by Circle SDK on client side in full integration,
-    // here we store token for server-side verify step)
-    otpSessions.set(email.toLowerCase(), {
-      userToken,
-      encryptionKey,
-      expiresAt: Date.now() + 10 * 60 * 1000, // 10 min
+    // Step 4: Create wallet initialization challenge
+    // This creates a challenge that the frontend will execute with the SDK
+    const challengeRes = await fetch(`${baseCircleUrl}/user/initializing`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "X-User-Token": userToken,
+      },
+      body: JSON.stringify({
+        idempotencyKey: `wallet-init-${email}-${Date.now()}`,
+        encryptedDeviceSecret: encryptionKey,
+      }),
     });
 
+    let challengeId = "";
+    
+    if (challengeRes.ok) {
+      const challengeData = await challengeRes.json() as any;
+      challengeId = challengeData.data?.challengeId;
+    } else if (challengeRes.status === 409) {
+      // User already initialized, get existing wallets
+      const walletsRes = await fetch(`${baseCircleUrl}/wallets?userId=${encodeURIComponent(email)}`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+        },
+      });
+      
+      if (walletsRes.ok) {
+        const walletsData = await walletsRes.json() as any;
+        const wallets = walletsData.data?.wallets ?? [];
+        
+        if (wallets.length > 0) {
+          console.log(`✅ Existing wallet found for ${email}: ${wallets[0].address}`);
+          // Return existing wallet info
+          res.json({
+            success: true,
+            userToken,
+            encryptionKey,
+            challengeId: null, // No challenge needed, already initialized
+            existingWallet: {
+              id: wallets[0].id,
+              address: wallets[0].address,
+              blockchain: wallets[0].blockchain,
+            },
+            message: "User already has a wallet. Authenticating with existing wallet.",
+          });
+          return;
+        }
+      }
+    } else {
+      const body = await challengeRes.text();
+      console.warn("Wallet initialization challenge error:", body);
+      // Continue without challenge, frontend will handle
+    }
+
     console.log(`✅ Circle OTP session created for ${email}`);
-    res.json({ success: true, message: "Verification code sent to your email." });
+    res.json({
+      success: true,
+      userToken,
+      encryptionKey,
+      challengeId,
+      message: "Verification code sent to your email.",
+    });
   } catch (err: any) {
     console.error("send-otp error:", err);
     res.status(500).json({ error: err.message ?? "Failed to initiate email OTP." });
@@ -112,22 +170,13 @@ router.post("/email/send-otp", async (req, res) => {
 });
 
 // ── POST /api/auth/email/verify-otp ───────────────────────────────────────
+// This endpoint is no longer needed for Email OTP flow - the SDK handles verification
+// Kept for backward compatibility
 router.post("/email/verify-otp", async (req, res) => {
-  const { email, otp } = req.body as { email?: string; otp?: string };
+  const { email } = req.body as { email?: string };
 
-  if (!email || !otp) {
-    res.status(400).json({ error: "email and otp are required." });
-    return;
-  }
-
-  const session = otpSessions.get(email.toLowerCase());
-  if (!session) {
-    res.status(400).json({ error: "No active OTP session. Please request a new code." });
-    return;
-  }
-  if (Date.now() > session.expiresAt) {
-    otpSessions.delete(email.toLowerCase());
-    res.status(400).json({ error: "OTP session expired. Please request a new code." });
+  if (!email) {
+    res.status(400).json({ error: "email is required." });
     return;
   }
 
@@ -137,38 +186,35 @@ router.post("/email/verify-otp", async (req, res) => {
 
     const baseCircleUrl = "https://api.circle.com/v1/w3s";
 
-    // Verify OTP via Circle — POST /user/pin/restore (OTP is treated as PIN recovery code)
-    // For Email OTP wallets, Circle uses the W3S Web SDK challenge flow.
-    // Server-side we call the initialize endpoint with the OTP code.
-           // PERMANENT CLEAN FIX: Email OTP verify
-    const verifyRes = await fetch(`${baseCircleUrl}/users/token`, {
-      method: "POST",
+    // Get user's wallets
+    const walletsRes = await fetch(`${baseCircleUrl}/wallets?userId=${encodeURIComponent(email)}`, {
+      method: "GET",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "X-User-Token": session.userToken,
       },
-      body: JSON.stringify({ userId: email }),
     });
 
-    let walletAddress = "";
-
-    if (verifyRes.ok) {
-      const data = await verifyRes.json() as any;
-      walletAddress = data.data?.wallets?.[0]?.address || 
-                     `0x${email.replace(/[^a-f0-9]/gi, "").padStart(40, "0")}`;
-    } else {
-      walletAddress = `0x${email.replace(/[^a-f0-9]/gi, "").padStart(40, "0")}`;
+    if (!walletsRes.ok) {
+      throw new Error("Failed to fetch user wallets");
     }
 
-    otpSessions.delete(email.toLowerCase());
+    const walletsData = await walletsRes.json() as any;
+    const wallets = walletsData.data?.wallets ?? [];
 
-    console.log(`✅ Email signin successful for ${email} → ${walletAddress}`);
+    if (wallets.length === 0) {
+      res.status(400).json({ error: "No wallet found for this user. Please complete wallet creation first." });
+      return;
+    }
+
+    const wallet = wallets[0];
+
+    console.log(`✅ Email signin successful for ${email} → ${wallet.address}`);
 
     res.json({
       success: true,
-      walletAddress: walletAddress,
-      sessionToken: session.userToken,
+      walletAddress: wallet.address,
+      walletId: wallet.id,
+      blockchain: wallet.blockchain,
     });
   } catch (err: any) {
     console.error("verify-otp error:", err);

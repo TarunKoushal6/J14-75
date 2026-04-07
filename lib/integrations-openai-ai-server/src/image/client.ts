@@ -28,7 +28,13 @@ export async function generateImageBuffer(
     prompt,
     size,
   });
-  const base64 = response.data[0]?.b64_json ?? "";
+  if (!response.data || response.data.length === 0) {
+    throw new Error("No image data returned from OpenAI API");
+  }
+  const base64 = response.data[0]?.b64_json;
+  if (!base64) {
+    throw new Error("OpenAI response missing b64_json field");
+  }
   return Buffer.from(base64, "base64");
 }
 
@@ -37,26 +43,40 @@ export async function editImages(
   prompt: string,
   outputPath?: string
 ): Promise<Buffer> {
-  const images = await Promise.all(
-    imageFiles.map((file) =>
-      toFile(fs.createReadStream(file), file, {
-        type: "image/png",
-      })
-    )
-  );
+  try {
+    const images = await Promise.all(
+      imageFiles.map((file) =>
+        toFile(fs.createReadStream(file), file, {
+          type: "image/png",
+        })
+      )
+    );
 
-  const response = await openai.images.edit({
-    model: "gpt-image-1",
-    image: images,
-    prompt,
-  });
+    const response = await openai.images.edit({
+      model: "gpt-image-1",
+      image: images,
+      prompt,
+    });
 
-  const imageBase64 = response.data[0]?.b64_json ?? "";
-  const imageBytes = Buffer.from(imageBase64, "base64");
+    if (!response.data || response.data.length === 0) {
+      throw new Error("No image data returned from OpenAI API");
+    }
+    const imageBase64 = response.data[0]?.b64_json;
+    if (!imageBase64) {
+      throw new Error("No base64 data in OpenAI response");
+    }
 
-  if (outputPath) {
-    fs.writeFileSync(outputPath, imageBytes);
+    const imageBytes = Buffer.from(imageBase64, "base64");
+
+    if (outputPath) {
+      fs.writeFileSync(outputPath, imageBytes);
+    }
+
+    return imageBytes;
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes("429") || error.message.includes("rate limit"))) {
+      throw new Error("OpenAI rate limit exceeded. Please try again with fewer requests or after some time.");
+    }
+    throw new Error(`Image processing failed: ${error instanceof Error ? error.message : error}`);
   }
-
-  return imageBytes;
 }

@@ -1,316 +1,210 @@
+// J14-75 App Kit Integration
+// Wrapper around Circle App Kit for Arc Testnet operations
+
+import { appKit } from "@circle-fin/app-kit";
+import { createPublicClient, http, formatUnits, parseUnits, Address } from "viem";
+import { arcTestnet } from "viem/chains";
+
+// Initialize App Kit with testnet configuration
+const kit = appKit({
+  appId: process.env.VITE_APP_ID || "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+  clientUrl: process.env.VITE_CLIENT_URL || "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
+  walletSetId: process.env.VITE_WALLET_SET_ID || "",
+  apiKey: process.env.CIRCLE_API_KEY || "",
+  entitySecret: process.env.CIRCLE_ENTITY_SECRET || "",
+  chainId: 5042002, // Arc Testnet
+  // Optional: Gas Station for sponsored transactions
+  gasStation: {
+    enabled: !!process.env.GAS_STATION_POLICY_ID,
+    policyId: process.env.GAS_STATION_POLICY_ID || undefined,
+  },
+});
+
+// Arc Testnet public client for balance checks
+const arcClient = createPublicClient({
+  chain: arcTestnet,
+  transport: http(),
+});
+
 /**
- * Arc App Kit integration for J14-75
- *
- * Uses the official Arc App Kit SDK for all on-chain execution:
- *  - kit.send()   → token transfers on Arc Testnet
- *  - kit.bridge() → cross-chain USDC via CCTP (Arc ↔ other chains)
- *  - kit.swap()   → cross-chain/same-chain swaps (requires KIT_KEY env var)
- *
- * Adapter: @circle-fin/adapter-circle-wallets
- *   – Connects to Circle Developer-Controlled Wallets
- *   – Requires CIRCLE_API_KEY + CIRCLE_ENTITY_SECRET
- *   – No raw private keys needed; Circle manages key custody
- *
- * Gas Station: Circle-sponsored gas via GAS_STATION_POLICY_ID env var
- *   – Attached as policyId to send/bridge/swap calls for email-authenticated users
- *
- * Docs: https://docs.arc.network/app-kit
+ * Get or create the agent's Circle wallet for a user
+ * Maps user's connected address (MetaMask) to Circle wallet
  */
-
-import { AppKit } from "@circle-fin/app-kit";
-import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
-import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
-
-// Singleton App Kit instance
-export const kit = new AppKit();
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Build the Circle Wallets adapter (server-side, no private key needed)
-// ──────────────────────────────────────────────────────────────────────────────
-export function buildCircleAdapter() {
-  const apiKey = process.env.CIRCLE_API_KEY;
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
-
-  if (!apiKey || !entitySecret) {
-    throw new Error(
-      "CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET must be set to execute on-chain transactions."
-    );
+export async function getOrCreateAgentWallet(userAddress: string) {
+  if (!kit.walletSetId) {
+    throw new Error("Wallet Set ID not configured");
   }
 
-  return createCircleWalletsAdapter({ apiKey, entitySecret });
-}
+  try {
+    // Check if wallet already exists for this user
+    const wallets = await kit.listWallets({
+      walletSetId: kit.walletSetId,
+      refId: userAddress.toLowerCase(),
+    });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Wallet registry: user connected address → Circle wallet info
-// In production this should live in a database.
-// ──────────────────────────────────────────────────────────────────────────────
-const walletRegistry = new Map<
-  string, // key: userAddress.toLowerCase()
-  { circleWalletId: string; circleAddress: string }
->();
+    if (wallets.length > 0) {
+      const wallet = wallets[0];
+      return {
+        circleWalletId: wallet.id,
+        circleAddress: wallet.address,
+      };
+    }
 
-let appWalletSetId: string | null = null;
+    // Create new wallet for user
+    const newWallet = await kit.createWallets({
+      walletSetId: kit.walletSetId,
+      blockchains: ["ETH"], // EVM compatible for Arc Testnet
+      count: 1,
+      refId: userAddress.toLowerCase(),
+      metadata: {
+        name: `J14-75 Agent Wallet for ${userAddress.slice(0, 8)}`,
+      },
+    });
 
-function getCircleClient() {
-  const apiKey = process.env.CIRCLE_API_KEY;
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
-  if (!apiKey || !entitySecret) {
-    throw new Error("CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are required.");
+    return {
+      circleWalletId: newWallet[0].id,
+      circleAddress: newWallet[0].address,
+    };
+  } catch (error) {
+    console.error("Failed to get/create agent wallet:", error);
+    throw error;
   }
-  return initiateDeveloperControlledWalletsClient({ apiKey, entitySecret });
-}
-
-async function ensureWalletSet(): Promise<string> {
-  if (appWalletSetId) return appWalletSetId;
-  const client = getCircleClient();
-
-  const listRes = await client.listWalletSets({ pageSize: 10 });
-  const existing = (listRes.data?.walletSets ?? []).find(
-    (ws: any) => ws.name === "J14-75-AppKit"
-  );
-  if (existing?.id) {
-    appWalletSetId = existing.id;
-    return appWalletSetId!;
-  }
-
-  const res = await client.createWalletSet({
-    name: "J14-75-AppKit",
-    idempotencyKey: `j1475-appkit-walletset-${Date.now()}`,
-  });
-  appWalletSetId = res.data?.walletSet?.id ?? null;
-  if (!appWalletSetId) throw new Error("Failed to create Circle wallet set.");
-  console.log(`✅ Circle wallet set created: ${appWalletSetId}`);
-  return appWalletSetId;
 }
 
 /**
- * Returns (or creates) a Circle developer-controlled wallet for a given user.
- * The returned circleAddress is the on-chain address used with App Kit.
+ * Send tokens using kit.send()
+ * Supports native USDC (Arc) and ERC-20 transfers
  */
-export async function getOrCreateAgentWallet(userAddress: string): Promise<{
-  circleWalletId: string;
-  circleAddress: string;
-}> {
-  const key = userAddress.toLowerCase();
-  if (walletRegistry.has(key)) return walletRegistry.get(key)!;
+export async function appKitSend(params: {
+  circleAddress: string; // User's Circle wallet address
+  recipient: string; // Recipient address
+  amount: string; // Amount in human-readable format (e.g., "5.00")
+  token: string; // Token symbol (USDC, EURC, etc.)
+}) {
+  const { circleAddress, recipient, amount, token } = params;
 
-  const client = getCircleClient();
-  const walletSetId = await ensureWalletSet();
+  // Determine if token is native or ERC-20 on Arc Testnet
+  const isNative = token === "USDC"; // USDC is native gas on Arc Testnet
+  const decimals = isNative ? 18 : 6; // Native: 18, ERC-20: 6
 
-  // Search existing wallets for a refId match
-  const listRes = await client.listWallets({ walletSetId, pageSize: 50 });
-  const match = (listRes.data?.wallets ?? []).find(
-    (w: any) => w.refId === key
-  );
+  // Parse amount to smallest unit
+  const amountWei = parseUnits(amount, decimals);
 
-  if (match?.id && match?.address) {
-    const entry = { circleWalletId: match.id, circleAddress: match.address };
-    walletRegistry.set(key, entry);
-    console.log(`♻️  Reusing Circle wallet ${match.id} for user ${userAddress}`);
-    return entry;
-  }
-
-  // Create a new wallet
-  const createRes = await client.createWallets({
-    blockchains: ["ETH"] as any,
-    count: 1,
-    walletSetId,
-    metadata: [
-      { name: `J14-75 Agent (${userAddress.slice(0, 8)})`, refId: key },
-    ],
-  } as any);
-
-  const w = createRes.data?.wallets?.[0];
-  if (!w?.id || !w?.address) {
-    throw new Error("Circle wallet creation returned no wallet.");
-  }
-
-  const entry = { circleWalletId: w.id, circleAddress: w.address };
-  walletRegistry.set(key, entry);
-  console.log(`✅ Circle wallet created: ${w.id} (${w.address})`);
-  return entry;
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// SEND — transfer tokens via App Kit
-// ──────────────────────────────────────────────────────────────────────────────
-export type SendOptions = {
-  circleAddress: string;
-  recipient: string;
-  amount: string;
-  token?: string;
-};
-
-export async function appKitSend(opts: SendOptions): Promise<{
-  txHash: string;
-  explorerUrl: string;
-}> {
-  const adapter = buildCircleAdapter();
-
-  console.log(
-    `📤 kit.send(): ${opts.amount} ${opts.token ?? "USDC"} → ${opts.recipient} from Circle wallet ${opts.circleAddress}`
-  );
-
+  // Use kit.send for execution
   const result = await kit.send({
-    from: {
-      adapter,
-      chain: "Arc_Testnet",
-      address: opts.circleAddress,
+    walletAddress: circleAddress,
+    to: recipient as Address,
+    amount: amountWei.toString(),
+    tokenId: isNative ? undefined : token, // undefined for native, token symbol for ERC-20
+    options: {
+      // Enable gas sponsorship for email users if configured
+      sponsored: !!process.env.GAS_STATION_POLICY_ID,
     },
-    to: opts.recipient,
-    amount: opts.amount,
-    token: opts.token ?? "USDC",
   });
 
-  console.log("✅ kit.send() result:", JSON.stringify(result, null, 2));
-
-  const txHash =
-    (result as any).txHash ??
-    (result as any).steps?.[result.steps.length - 1]?.txHash ??
-    "";
-
-  const explorerUrl = txHash
-    ? `https://testnet.arcscan.app/tx/${txHash}`
-    : "";
-
-  if (!txHash) {
-    throw new Error(
-      `kit.send() completed but returned no txHash. Full result: ${JSON.stringify(result)}`
-    );
-  }
-
-  return { txHash, explorerUrl };
+  return {
+    txHash: result.transactionHash,
+    explorerUrl: `https://explorer.testnet.arc.network/tx/${result.transactionHash}`,
+  };
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// BRIDGE — cross-chain USDC via CCTP using App Kit
-// ──────────────────────────────────────────────────────────────────────────────
-export type BridgeOptions = {
-  circleAddress: string;
-  fromChain: string; // App Kit chain identifier e.g. "Ethereum_Sepolia"
-  toChain: string;   // App Kit chain identifier e.g. "Arc_Testnet"
-  amount: string;
-};
 
 /**
- * Maps user-friendly chain names to Arc App Kit chain identifiers.
- * Reference: https://docs.arc.network/app-kit/references/supported-blockchains
+ * Bridge USDC between chains using kit.bridge() (CCTP)
  */
-export function resolveChain(name: string): string {
-  const n = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const map: Record<string, string> = {
-    arc: "Arc_Testnet",
-    arctestnet: "Arc_Testnet",
-    ethereum: "Ethereum_Sepolia",
-    eth: "Ethereum_Sepolia",
-    sepolia: "Ethereum_Sepolia",
-    ethsepolia: "Ethereum_Sepolia",
-    base: "Base_Sepolia",
-    basesepolia: "Base_Sepolia",
-    arbitrum: "Arbitrum_Sepolia",
-    arb: "Arbitrum_Sepolia",
-    polygon: "Polygon_Amoy",
-    matic: "Polygon_Amoy",
-    avalanche: "Avalanche_Fuji",
-    avax: "Avalanche_Fuji",
-    solana: "Solana_Devnet",
-    sol: "Solana_Devnet",
-  };
-  return map[n] ?? name;
-}
+export async function appKitBridge(params: {
+  circleAddress: string; // User's Circle wallet address
+  fromChain: string; // Source chain (e.g., "Arc_Testnet", "Ethereum")
+  toChain: string; // Destination chain
+  amount: string; // Amount in USDC (6 decimals)
+}) {
+  const { circleAddress, fromChain, toChain, amount } = params;
 
-export async function appKitBridge(opts: BridgeOptions): Promise<{
-  txHash: string;
-  steps: any[];
-}> {
-  const adapter = buildCircleAdapter();
-  const fromChainId = resolveChain(opts.fromChain);
-  const toChainId = resolveChain(opts.toChain);
-
-  console.log(
-    `🌉 kit.bridge(): ${opts.amount} USDC | ${fromChainId} → ${toChainId} | wallet ${opts.circleAddress}`
-  );
+  // Parse amount (USDC uses 6 decimals)
+  const amountWei = parseUnits(amount, 6);
 
   const result = await kit.bridge({
-    from: {
-      adapter,
-      chain: fromChainId as any,
-      address: opts.circleAddress,
+    walletAddress: circleAddress,
+    fromChain: fromChain,
+    toChain: toChain,
+    amount: amountWei.toString(),
+    options: {
+      sponsored: !!process.env.GAS_STATION_POLICY_ID,
     },
-    to: {
-      adapter,
-      chain: toChainId as any,
-      address: opts.circleAddress,
-    },
-    amount: opts.amount,
   });
 
-  console.log("✅ kit.bridge() result:", JSON.stringify(result, null, 2));
-
-  const steps = (result as any).steps ?? [];
-  const lastTxHash =
-    steps[steps.length - 1]?.txHash ?? (result as any).txHash ?? "";
-
-  return { txHash: lastTxHash, steps };
+  return {
+    txHash: result.transactionHash,
+    steps: result.steps || [],
+  };
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// SWAP — token swap via App Kit
-// Requires KIT_KEY env var (from Circle Console) for the swap config.
-// Note: Swap is only supported on mainnet. If called with Arc_Testnet it will
-// fail at the API level; the agent layer checks this first and warns the user.
-// ──────────────────────────────────────────────────────────────────────────────
-export type SwapOptions = {
-  circleAddress: string;
-  chain: string;
-  tokenIn: string;
-  tokenOut: string;
-  amountIn: string;
-  gasSponsorPolicyId?: string;
-};
+/**
+ * Swap tokens using kit.swap() (mainnet only, with Gas Station)
+ */
+export async function appKitSwap(params: {
+  circleAddress: string; // User's Circle wallet address
+  chain: string; // Destination chain (e.g., "Ethereum", "Polygon")
+  tokenIn: string; // Input token symbol
+  tokenOut: string; // Output token symbol
+  amountIn: string; // Input amount in human-readable format
+  gasSponsorPolicyId?: string; // Optional Gas Station policy ID
+}) {
+  const { circleAddress, chain, tokenIn, tokenOut, amountIn, gasSponsorPolicyId } = params;
 
-export async function appKitSwap(opts: SwapOptions): Promise<{
-  txHash: string;
-  steps: any[];
-}> {
-  const kitKey = process.env.KIT_KEY;
-  if (!kitKey) {
-    throw new Error("KIT_KEY environment variable is required for kit.swap().");
-  }
+  // Parse amount based on input token (assume 6 decimals for USDC/USDT, etc.)
+  // In production, you'd look up token decimals
+  const amountWei = parseUnits(amountIn, 6);
 
-  const adapter = buildCircleAdapter();
-  const chainId = resolveChain(opts.chain);
-
-  console.log(
-    `🔄 kit.swap(): ${opts.amountIn} ${opts.tokenIn} → ${opts.tokenOut} on ${chainId} from ${opts.circleAddress}`
-  );
-
-  const swapParams: Record<string, any> = {
-    from: {
-      adapter,
-      chain: chainId as any,
-      address: opts.circleAddress,
+  const result = await kit.swap({
+    walletAddress: circleAddress,
+    chain: chain,
+    fromToken: tokenIn,
+    toToken: tokenOut,
+    amount: amountWei.toString(),
+    options: {
+      sponsored: !!gasSponsorPolicyId,
+      policyId: gasSponsorPolicyId,
     },
-    tokenIn: opts.tokenIn,
-    tokenOut: opts.tokenOut,
-    amountIn: opts.amountIn,
-    config: {
-      kitKey,
-    },
+  });
+
+  return {
+    txHash: result.transactionHash,
+    steps: result.steps || [],
+  };
+}
+
+/**
+ * Resolve chain name to Chain ID or standard identifier
+ */
+export function resolveChain(chainName: string): string {
+  const chainMap: Record<string, string> = {
+    "Arc_Testnet": "Arc_Testnet",
+    "arc-testnet": "Arc_Testnet",
+    "arc": "Arc_Testnet",
+    "Ethereum": "Ethereum",
+    "ethereum": "Ethereum",
+    "eth": "Ethereum",
+    "Polygon": "Polygon",
+    "polygon": "Polygon",
+    "matic": "Polygon",
+    "Base": "Base",
+    "base": "Base",
+    "Arbitrum": "Arbitrum",
+    "arbitrum": "Arbitrum",
+    "avalanche": "Avalanche",
+    "Optimism": "Optimism",
+    "optimism": "Optimism",
+    "solana": "Solana",
   };
 
-  // Attach Gas Station policy if provided (for email-authenticated users)
-  if (opts.gasSponsorPolicyId) {
-    swapParams.policyId = opts.gasSponsorPolicyId;
-  }
-
-  const result = await (kit as any).swap(swapParams);
-
-  console.log("✅ kit.swap() result:", JSON.stringify(result, null, 2));
-
-  const steps = (result as any).steps ?? [];
-  const lastTxHash =
-    steps[steps.length - 1]?.txHash ?? (result as any).txHash ?? "";
-
-  return { txHash: lastTxHash, steps };
+  return chainMap[chainName.toLowerCase()] || chainName;
 }
+
+export default {
+  kit,
+  getOrCreateAgentWallet,
+  appKitSend,
+  appKitBridge,
+  appKitSwap,
+  resolveChain,
+};

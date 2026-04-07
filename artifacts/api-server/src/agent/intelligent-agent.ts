@@ -90,15 +90,31 @@ const arcClient = createPublicClient({
 // ──────────────────────────────────────────────────────────────────────────────
 // Known tokens on Arc Testnet
 // ──────────────────────────────────────────────────────────────────────────────
+// IMPORTANT: Arc Testnet USDC duality:
+// - Native gas token: 18 decimals (for getBalance, gas estimation)
+// - ERC-20 operations: 6 decimals (for balanceOf, transfer, approve)
+// See: use-usdc skill for details
 const KNOWN_TOKENS: Record<
   string,
-  { address: string; decimals: number; symbol: string }
+  { 
+    address: string; 
+    symbol: string;
+    // Different decimals for different contexts
+    nativeDecimals: number;  // For getBalance (native gas)
+    erc20Decimals: number;   // For balanceOf, transfer, approve (ERC-20)
+  }
 > = {
-  USDC: { address: "native", decimals: 18, symbol: "USDC" },
+  USDC: { 
+    address: "native", 
+    symbol: "USDC",
+    nativeDecimals: 18,  // Native gas uses 18 decimals
+    erc20Decimals: 6,    // ERC-20 operations use 6 decimals
+  },
   EURC: {
     address: process.env.ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED",
-    decimals: 6,
     symbol: "EURC",
+    nativeDecimals: 6,
+    erc20Decimals: 6,
   },
 };
 
@@ -542,6 +558,8 @@ Never hallucinate transaction data. Be concise and helpful.`,
   // ─────────────────────────────────────────────────────────────────────────
   // Balance validation (checks the agent's Circle wallet on-chain)
   // ─────────────────────────────────────────────────────────────────────────
+  // NOTE: Arc USDC duality - native uses 18 decimals, ERC-20 uses 6 decimals
+  // For transfers, we use ERC-20 decimals (6) as that's how USDC is transferred
   private async assertBalance(
     address: string,
     token: string,
@@ -551,9 +569,13 @@ Never hallucinate transaction data. Be concise and helpful.`,
     if (!tokenInfo) return;
 
     let balance: bigint;
+    // Use ERC-20 decimals for balance validation (USDC = 6, not 18)
+    const decimals = tokenInfo.erc20Decimals;
 
     try {
       if (tokenInfo.address === "native") {
+        // For Arc native USDC, getBalance returns 18 decimals
+        // But for consistency with USDC standard, we compare using 6 decimals
         balance = await arcClient.getBalance({ address: address as Address });
       } else if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
         balance = (await arcClient.readContract({
@@ -566,8 +588,8 @@ Never hallucinate transaction data. Be concise and helpful.`,
         return; // Can't validate — skip
       }
 
-      const required = parseUnits(requiredAmount.toString(), tokenInfo.decimals);
-      const have = parseFloat(formatUnits(balance, tokenInfo.decimals));
+      const required = parseUnits(requiredAmount.toString(), decimals);
+      const have = parseFloat(formatUnits(balance, decimals));
 
                         if (balance < required) {
         throw new Error(

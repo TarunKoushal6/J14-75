@@ -10,7 +10,12 @@
   },
   "private": true,
   "devDependencies": {
-    "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+    "@types/node": "catalog:",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "p-limit": "^7.3.0",
+    "p-retry": "^7.1.1"
   }
 }

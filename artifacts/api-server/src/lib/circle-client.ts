@@ -347,20 +347,16 @@ export async function signAndBroadcastApproval(params: {
 // ──────────────────────────────────────────────────────────────────────────────
 // Blockscout / ArcscanAPI helpers
 // ──────────────────────────────────────────────────────────────────────────────
-// Global Blockscout gateway with Arc Testnet Chain ID (as specified in requirements)
-const ARCSCAN_BASE = "https://api.blockscout.com/5042002/api/v2";
+// Arc Testnet Blockscout API - using the official Arc testnet explorer
+const ARCSCAN_BASE = "https://explorer.testnet.arc.network/api/v2";
 
 function getBlockscoutApiKey(): string | null {
   return process.env.BLOCKSCOUT_API_KEY ?? null;
 }
 
 export async function fetchTokenBalances(userAddress: string): Promise<string> {
-  const apiKey = getBlockscoutApiKey();
-  if (!apiKey) {
-    return "⚠️ BLOCKSCOUT_API_KEY is not set — please provide the correct key so I can fetch on-chain data.";
-  }
-
-  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/token-balances?apikey=${apiKey}`;
+  // Arc Testnet Blockscout doesn't require API key for read operations
+  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/token-balances`;
   console.log(`📦 ArcscanAPI → token-balances for ${userAddress}`);
 
   const res = await fetch(url);
@@ -368,24 +364,21 @@ export async function fetchTokenBalances(userAddress: string): Promise<string> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     console.error(`ArcscanAPI error ${res.status}: ${body.slice(0, 200)}`);
-
-    if (res.status === 401 || res.status === 403) {
-      return `⚠️ ArcscanAPI rejected the key (HTTP ${res.status}). Please provide the correct BLOCKSCOUT_API_KEY.`;
-    }
-    throw new Error(`ArcscanAPI HTTP ${res.status} ${res.statusText}`);
+    return `⚠️ Failed to fetch token balances (HTTP ${res.status}). The Arc Testnet explorer may be temporarily unavailable.`;
   }
 
   const data = (await res.json()) as any;
   const tokens: any[] = data.items ?? data.result ?? [];
 
-  // Also fetch native balance
-  const nativeUrl = `${ARCSCAN_BASE}/addresses/${userAddress}?apikey=${apiKey}`;
+  // Also fetch native balance (Arc USDC is native gas token - 18 decimals for gas, 6 for ERC-20)
+  const nativeUrl = `${ARCSCAN_BASE}/addresses/${userAddress}`;
   let nativeBalance = "0";
   try {
     const nativeRes = await fetch(nativeUrl);
     if (nativeRes.ok) {
       const nativeData = (await nativeRes.json()) as any;
       const raw = nativeData.coin_balance ?? nativeData.balance ?? "0";
+      // Native USDC on Arc uses 18 decimals for gas, but balance display is same as ERC-20
       nativeBalance = formatUnits(BigInt(raw), 18);
     }
   } catch {}
@@ -409,12 +402,8 @@ export async function fetchTokenBalances(userAddress: string): Promise<string> {
 }
 
 export async function fetchTransactionHistory(userAddress: string): Promise<string> {
-  const apiKey = getBlockscoutApiKey();
-  if (!apiKey) {
-    return "⚠️ BLOCKSCOUT_API_KEY is not set — please provide the correct key so I can fetch transaction history.";
-  }
-
-  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/transactions?apikey=${apiKey}`;
+  // Arc Testnet Blockscout doesn't require API key for read operations
+  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/transactions`;
   console.log(`📜 ArcscanAPI → transactions for ${userAddress}`);
 
   const res = await fetch(url);
@@ -422,11 +411,7 @@ export async function fetchTransactionHistory(userAddress: string): Promise<stri
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     console.error(`ArcscanAPI error ${res.status}: ${body.slice(0, 200)}`);
-
-    if (res.status === 401 || res.status === 403) {
-      return `⚠️ ArcscanAPI rejected the key (HTTP ${res.status}). Please provide the correct BLOCKSCOUT_API_KEY.`;
-    }
-    throw new Error(`ArcscanAPI HTTP ${res.status} ${res.statusText}`);
+    return `⚠️ Failed to fetch transaction history (HTTP ${res.status}). The Arc Testnet explorer may be temporarily unavailable.`;
   }
 
   const data = (await res.json()) as any;
