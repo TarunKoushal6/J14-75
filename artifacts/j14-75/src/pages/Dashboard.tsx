@@ -742,8 +742,9 @@ export default function Dashboard() {
         // Lazy-load W3SSdk to avoid top-level import issues
         const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk");
         const w3sSdk = new W3SSdk({
-          appId: "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
-          clientUrl: "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
+          appSettings: {
+            appId: "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+          },
         });
         setSdk(w3sSdk);
         console.log("✅ Circle W3SSdk initialized");

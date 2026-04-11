@@ -6,6 +6,16 @@ import {
   BarChart3, Lock, Globe, Cpu, Mail, LogOut, Eye, EyeOff
 } from "lucide-react";
 
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] | object }) => Promise<any>;
+};
+
+declare global {
+  interface Window {
+    ethereum?: EthereumProvider;
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────────────────
@@ -259,7 +269,7 @@ function EmailSignInPanel({
         Powered by Circle · Gasless wallet auto-created
       </div>
 
-      {(authState.step === "idle" || authState.step === "email_input" || authState.step === "loading") && authState.step !== "otp_input" && (
+      {(authState.step === "idle" || authState.step === "email_input" || authState.step === "loading") && (
         <form onSubmit={handleEmailSubmit} className="flex flex-col gap-2">
           <input
             ref={emailRef}
@@ -565,14 +575,15 @@ export default function App() {
 
   // ── Connect MetaMask / Rabby wallet ──────────────────────────────────────
   const connectWallet = useCallback(async () => {
-    if (typeof window.ethereum === "undefined") {
+    const ethereum = window.ethereum;
+    if (typeof ethereum === "undefined") {
       alert("No Web3 wallet detected. Install MetaMask or Rabby to connect.");
       return;
     }
     setConnecting(true);
     try {
-      const accounts = await (window.ethereum as any).request({ method: "eth_requestAccounts" });
-      const chainId = await (window.ethereum as any).request({ method: "eth_chainId" });
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+      const chainId = await ethereum.request({ method: "eth_chainId" });
       const chainName = chainId === "0xaa36a7" ? "ETH-SEPOLIA"
         : chainId === "0x13e31" ? "ARC-TESTNET"
         : `Chain ${chainId}`;

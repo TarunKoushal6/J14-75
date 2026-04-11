@@ -1,24 +1,31 @@
 // J14-75 App Kit Integration
 // Wrapper around Circle App Kit for Arc Testnet operations
 
-import { appKit } from "@circle-fin/app-kit";
+import { AppKit } from "@circle-fin/app-kit";
 import { createPublicClient, http, formatUnits, parseUnits, Address } from "viem";
 import { arcTestnet } from "viem/chains";
 
+type LegacyKit = AppKit & {
+  walletSetId?: string;
+  listWallets: (params: { walletSetId: string; refId: string }) => Promise<Array<{ id: string; address: string }>>;
+  createWallets: (params: {
+    walletSetId: string;
+    blockchains: string[];
+    count: number;
+    refId: string;
+    metadata?: { name: string };
+  }) => Promise<Array<{ id: string; address: string }>>;
+  send: (params: unknown) => Promise<{ transactionHash: string }>;
+  bridge: (params: unknown) => Promise<{ transactionHash: string; steps?: unknown[] }>;
+  swap: (params: unknown) => Promise<{ transactionHash: string; steps?: unknown[] }>;
+};
+
 // Initialize App Kit with testnet configuration
-const kit = appKit({
-  appId: process.env.VITE_APP_ID || "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
-  clientUrl: process.env.VITE_CLIENT_URL || "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
-  walletSetId: process.env.VITE_WALLET_SET_ID || "",
-  apiKey: process.env.CIRCLE_API_KEY || "",
-  entitySecret: process.env.CIRCLE_ENTITY_SECRET || "",
-  chainId: 5042002, // Arc Testnet
-  // Optional: Gas Station for sponsored transactions
-  gasStation: {
-    enabled: !!process.env.GAS_STATION_POLICY_ID,
-    policyId: process.env.GAS_STATION_POLICY_ID || undefined,
-  },
-});
+// The current integration expects legacy helper methods on `kit`.
+// Keep this permissive wrapper until the full AppKit adapter migration is complete.
+// TODO(j14-75): Replace this legacy typed wrapper with AppKit + Circle adapter contexts
+// (`from: { adapter, chain }`) and remove compatibility-only methods.
+export const kit: LegacyKit = new AppKit() as LegacyKit;
 
 // Arc Testnet public client for balance checks
 const arcClient = createPublicClient({
