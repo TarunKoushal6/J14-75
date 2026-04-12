@@ -1,5 +1,34 @@
 # Workspace
 
+## Vercel Deployment
+
+This project is configured for deployment on Vercel. The `vercel.json` file sets up:
+
+- **API** — `artifacts/api-server/src/index.ts` is deployed as a `@vercel/node` serverless function, handling all `/api/*` requests.
+- **Frontend** — `artifacts/j14-75` is built with `@vercel/static-build` (runs `pnpm run build`, outputs `dist/public`). A catch-all route serves `index.html` for client-side navigation.
+
+### Required Environment Variables
+
+Set the following in the Vercel project **Environment Variables** settings:
+
+| Variable | Required | Description |
+|---|---|---|
+| `GROQ_API_KEY` | ✅ | Groq API key for the Llama intent-parsing model |
+| `CIRCLE_API_KEY` | ✅ | Circle Developer API key (wallet operations, CCTP bridge) |
+| `CIRCLE_ENTITY_SECRET` | ✅ | Circle entity secret for developer-controlled wallets |
+| `BLOCKSCOUT_API_KEY` | ✅ | ArcscanAPI / Blockscout key for balance & transaction queries |
+| `ARC_EURC_ADDRESS` | ❌ optional | EURC ERC-20 contract address on Arc Testnet |
+
+> **Do not** set `PORT` or `BASE_PATH` — these are only used in the Replit dev environment and are not needed (or expected) by Vercel.
+
+### How It Builds
+
+Vercel runs `pnpm install` at the workspace root (detected via `pnpm-lock.yaml`), then:
+1. Builds the API serverless function from `artifacts/api-server/src/index.ts`.
+2. Runs `pnpm run build` inside `artifacts/j14-75` to produce `dist/public/`.
+
+The root `vercel-build` script (`pnpm --filter @workspace/j14-75 run build`) can also be used if you configure Vercel to use the root build command.
+
 ## Overview
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.

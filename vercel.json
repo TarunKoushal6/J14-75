@@ -7,6 +7,13 @@
       "config": {
         "includeFiles": ["artifacts/api-server/**/*"]
       }
+    },
+    {
+      "src": "artifacts/j14-75/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist/public"
+      }
     }
   ],
   "routes": [
@@ -15,8 +22,11 @@
       "dest": "artifacts/api-server/src/index.ts"
     },
     {
+      "handle": "filesystem"
+    },
+    {
       "src": "/(.*)",
-      "dest": "artifacts/j14-75/dist/index.html"
+      "dest": "/index.html"
     }
   ],
   "env": {
