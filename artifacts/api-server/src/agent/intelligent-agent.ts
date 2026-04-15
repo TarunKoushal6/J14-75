@@ -533,7 +533,6 @@ Output schema is same as before.`,
       tokenIn: tokenIn.toUpperCase(),
       tokenOut: tokenOut.toUpperCase(),
       amountIn: amountIn.toFixed(6),
-      gasSponsorPolicyId,
     });
 
     const stepSummary = steps

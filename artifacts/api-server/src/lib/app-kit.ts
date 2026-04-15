@@ -129,11 +129,11 @@ export async function appKitSwap(params: {
     from: {
       adapter: getCircleAdapter(),
       address: circleAddress,
-      chain: chainFromName(chain),
+      chain: chainFromName(chain) as any,
     },
     tokenIn: tokenIn.toUpperCase() as any,
     tokenOut: tokenOut.toUpperCase() as any,
-    amount: amountIn,
+    amountIn,
   });
 
   return {
