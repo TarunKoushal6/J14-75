@@ -18,6 +18,7 @@ import {
 } from "viem";
 
 // ── Constants ──────────────────────────────────────────────────────────────
+// Normalize env URLs so both with/without trailing slash work consistently.
 const stripTrailingSlash = (value: string) => value.replace(/\/$/, "");
 const ARC_TESTNET_RPC = stripTrailingSlash(import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network");
 const ARC_EXPLORER_URL = stripTrailingSlash(import.meta.env.VITE_ARC_EXPLORER_URL || "https://testnet.arcscan.app");

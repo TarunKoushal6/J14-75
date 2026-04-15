@@ -2,6 +2,7 @@ import { AppKit } from "@circle-fin/app-kit";
 import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
 import { getOrCreateCircleWallet } from "./circle-client.js";
 
+// AppKit can be initialized without constructor options; adapters/env provide runtime config.
 const kit = new AppKit();
 const ARC_NATIVE_TOKEN_SYMBOL = "USDC";
 
