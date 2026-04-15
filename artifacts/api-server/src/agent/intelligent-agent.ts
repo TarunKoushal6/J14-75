@@ -138,6 +138,9 @@ const arcClient = createPublicClient({
   transport: http(),
 });
 
+const DEFAULT_ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+const DEFAULT_ARC_EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Known tokens on Arc Testnet
 // ──────────────────────────────────────────────────────────────────────────────
@@ -156,13 +159,13 @@ const KNOWN_TOKENS: Record<
   }
 > = {
   USDC: { 
-    address: process.env.ARC_USDC_ADDRESS ?? "0x3600000000000000000000000000000000000000",
+    address: process.env.ARC_USDC_ADDRESS ?? DEFAULT_ARC_USDC_ADDRESS,
     symbol: "USDC",
     nativeDecimals: 18,  // Native gas uses 18 decimals
     erc20Decimals: 6,    // ERC-20 operations use 6 decimals
   },
   EURC: {
-    address: process.env.ARC_EURC_ADDRESS ?? "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+    address: process.env.ARC_EURC_ADDRESS ?? DEFAULT_ARC_EURC_ADDRESS,
     symbol: "EURC",
     nativeDecimals: 6,
     erc20Decimals: 6,
@@ -599,28 +602,24 @@ Never hallucinate transaction data. Be concise and helpful.`,
     const decimals = tokenInfo.erc20Decimals;
 
     try {
-      if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
-        balance = (await arcClient.readContract({
-          address: tokenInfo.address as Address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [address as Address],
-        })) as bigint;
-      } else {
-        return; // Can't validate — skip
-      }
+      balance = (await arcClient.readContract({
+        address: tokenInfo.address as Address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address as Address],
+      })) as bigint;
 
       const required = parseUnits(requiredAmount.toString(), decimals);
       const have = parseFloat(formatUnits(balance, decimals));
 
-                        if (balance < required) {
+      if (balance < required) {
         throw new Error(
           `❌ Insufficient ${token} balance in your wallet.\n` +
           `You have ${have.toFixed(4)} ${token} but need ${requiredAmount}.\n\n` +
           `Please add funds to: ${address}\n` +
           `After funding, try the transaction again.`
         );
-                      }
+      }
     } catch (err: any) {
       if (err.message?.includes("Insufficient")) throw err;
       console.warn(`⚠️ Balance check skipped: ${err.message}`);

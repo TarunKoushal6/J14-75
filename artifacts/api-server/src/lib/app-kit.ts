@@ -1,19 +1,9 @@
 import { AppKit } from "@circle-fin/app-kit";
-import {
-  ArcTestnet,
-  Arbitrum,
-  Avalanche,
-  Base,
-  Ethereum,
-  Optimism,
-  Polygon,
-  Solana,
-} from "@circle-fin/app-kit/chains";
 import { createCircleWalletsAdapter } from "@circle-fin/adapter-circle-wallets";
-import type { ChainDefinition } from "@circle-fin/app-kit";
 import { getOrCreateCircleWallet } from "./circle-client.js";
 
 const kit = new AppKit();
+const ARC_NATIVE_TOKEN_SYMBOL = "USDC";
 
 let adapter: ReturnType<typeof createCircleWalletsAdapter> | null = null;
 
@@ -35,17 +25,27 @@ function getCircleAdapter() {
   return adapter;
 }
 
-function chainFromName(chainName: string): ChainDefinition {
+type AppKitChainIdentifier =
+  | "Arc_Testnet"
+  | "Ethereum"
+  | "Polygon"
+  | "Base"
+  | "Arbitrum"
+  | "Optimism"
+  | "Avalanche"
+  | "Solana";
+
+function toAppKitChain(chainName: string): AppKitChainIdentifier {
   const key = chainName.trim().toLowerCase();
-  if (key === "arc" || key === "arc_testnet" || key === "arc-testnet") return ArcTestnet;
-  if (key === "ethereum" || key === "eth") return Ethereum;
-  if (key === "polygon" || key === "matic") return Polygon;
-  if (key === "base") return Base;
-  if (key === "arbitrum") return Arbitrum;
-  if (key === "optimism") return Optimism;
-  if (key === "avalanche") return Avalanche;
-  if (key === "solana") return Solana;
-  return ArcTestnet;
+  if (key === "arc" || key === "arc_testnet" || key === "arc-testnet") return "Arc_Testnet";
+  if (key === "ethereum" || key === "eth") return "Ethereum";
+  if (key === "polygon" || key === "matic") return "Polygon";
+  if (key === "base") return "Base";
+  if (key === "arbitrum") return "Arbitrum";
+  if (key === "optimism") return "Optimism";
+  if (key === "avalanche") return "Avalanche";
+  if (key === "solana") return "Solana";
+  return "Arc_Testnet";
 }
 
 /**
@@ -69,11 +69,14 @@ export async function appKitSend(params: {
     from: {
       adapter: getCircleAdapter(),
       address: circleAddress,
-      chain: ArcTestnet,
+      chain: toAppKitChain("Arc_Testnet"),
     },
     to: recipient,
     amount,
-    token: token.toUpperCase() === "USDC" ? "NATIVE" : token.toUpperCase(),
+    token:
+      token.toUpperCase() === ARC_NATIVE_TOKEN_SYMBOL
+        ? "NATIVE"
+        : token.toUpperCase(),
   });
 
   return {
@@ -98,12 +101,12 @@ export async function appKitBridge(params: {
     from: {
       adapter: getCircleAdapter(),
       address: circleAddress,
-      chain: chainFromName(fromChain),
+      chain: toAppKitChain(fromChain),
     },
     to: {
       adapter: getCircleAdapter(),
       address: circleAddress,
-      chain: chainFromName(toChain),
+      chain: toAppKitChain(toChain),
     },
     amount,
     token: "USDC",
@@ -129,7 +132,7 @@ export async function appKitSwap(params: {
     from: {
       adapter: getCircleAdapter(),
       address: circleAddress,
-      chain: chainFromName(chain) as any,
+      chain: toAppKitChain(chain),
     },
     tokenIn: tokenIn.toUpperCase() as any,
     tokenOut: tokenOut.toUpperCase() as any,

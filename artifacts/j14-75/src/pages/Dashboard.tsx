@@ -18,8 +18,8 @@ import {
 } from "viem";
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const ARC_TESTNET_RPC = import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network/";
-const ARC_EXPLORER_URL = import.meta.env.VITE_ARC_EXPLORER_URL || "https://testnet.arcscan.app";
+const ARC_TESTNET_RPC = (import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network").replace(/\/$/, "");
+const ARC_EXPLORER_URL = (import.meta.env.VITE_ARC_EXPLORER_URL || "https://testnet.arcscan.app").replace(/\/$/, "");
 const ARC_CHAIN_ID_HEX = "0x4CEF52"; // 5042002
 const ARC_CHAIN_ID_NUM = 5042002;
 const REPUTATION_REGISTRY = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
