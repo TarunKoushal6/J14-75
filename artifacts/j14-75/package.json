@@ -75,8 +75,6 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@circle-fin/modular-wallets-core": "^1.0.13",
-    "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
     "fastestsmallesttextencoderdecoder": "^1.0.22",
     "viem": "^2.47.4"
   }

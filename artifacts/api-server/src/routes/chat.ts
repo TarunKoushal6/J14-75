@@ -52,6 +52,7 @@ console.log("📧 Is email user?", isEmailUser);
       txHash: result.txHash,
       taskId: result.taskId,
       isScheduled: result.isScheduled,
+      toolUsed: "circle_app_kit",
     });
   } catch (err: any) {
     const errorMsg = err instanceof Error ? err.message : String(err);

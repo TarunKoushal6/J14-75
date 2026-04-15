@@ -78,12 +78,19 @@ async function callLLM(
 // Simple rule-based intent parsing fallback
 function simpleIntentParse(message: string): string {
   const lower = message.toLowerCase();
+  const amountMatch = lower.match(/(\d+(?:\.\d+)?)/);
+  const addressMatch = message.match(/0x[a-fA-F0-9]{40}/);
+  const amount = amountMatch ? Number(amountMatch[1]) : 1;
   
   // Check for transfer intent
   if (lower.includes("send") || lower.includes("transfer") || lower.includes("pay")) {
     return JSON.stringify({
       taskTypes: ["transfer"],
-      entities: { tokens: ["USDC"], amounts: [1] },
+      entities: {
+        tokens: [lower.includes("eurc") ? "EURC" : "USDC"],
+        amounts: [amount],
+        addresses: addressMatch ? [addressMatch[0]] : [],
+      },
       isScheduled: false
     });
   }
@@ -149,13 +156,13 @@ const KNOWN_TOKENS: Record<
   }
 > = {
   USDC: { 
-    address: "native", 
+    address: process.env.ARC_USDC_ADDRESS ?? "0x3600000000000000000000000000000000000000",
     symbol: "USDC",
     nativeDecimals: 18,  // Native gas uses 18 decimals
     erc20Decimals: 6,    // ERC-20 operations use 6 decimals
   },
   EURC: {
-    address: process.env.ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED",
+    address: process.env.ARC_EURC_ADDRESS ?? "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
     symbol: "EURC",
     nativeDecimals: 6,
     erc20Decimals: 6,
@@ -256,19 +263,10 @@ export class IntelligentAgent {
 
       // ── Scheduled tasks ────────────────────────────────────────────────
       if (analysis.isScheduled && analysis.scheduleTrigger) {
-        const taskId = `task_${Date.now()}`;
-        scheduledTasks.set(taskId, {
-          id: taskId,
-          type: analysis.taskTypes[0] ?? "unknown",
-          trigger: analysis.scheduleTrigger,
-          status: "active",
-          createdAt: new Date(),
-        });
         return {
-          success: true,
-          message: `⏰ Scheduled! ID: ${taskId}\nWill execute when: ${analysis.scheduleTrigger}`,
-          taskId,
-          isScheduled: true,
+          success: false,
+          message:
+            "❌ Scheduled execution is not enabled in this deployment. Please submit the transaction when you want it executed.",
         };
       }
 
@@ -372,14 +370,6 @@ Output schema is same as before.`,
         message: `❌ Unsupported token: ${token}. Arc Testnet supports USDC and EURC only.`,
       };
     }
-    if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
-      return {
-        success: false,
-        message:
-          "❌ EURC is not deployed on Arc Testnet yet. Set ARC_EURC_ADDRESS environment variable.",
-      };
-    }
-
     // Get the agent's Circle wallet
         // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
@@ -503,7 +493,7 @@ Output schema is same as before.`,
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SWAP — kit.swap() with KIT_KEY
+  // SWAP — kit.swap()
   // Swap is mainnet-only per Arc docs. We route swap requests to mainnet
   // chains. The user should specify which chain (defaults to Ethereum mainnet).
   // Gas Station policy is attached when isEmailUser=true.
@@ -521,13 +511,6 @@ Output schema is same as before.`,
       return {
         success: false,
         message: "❌ Swap requires an amount. Example: 'Swap 10 USDT for USDC on Ethereum'",
-      };
-    }
-
-    if (!process.env.KIT_KEY) {
-      return {
-        success: false,
-        message: "❌ KIT_KEY is not configured. Swap requires a Circle Kit Key from the Console.",
       };
     }
 
@@ -617,11 +600,7 @@ Never hallucinate transaction data. Be concise and helpful.`,
     const decimals = tokenInfo.erc20Decimals;
 
     try {
-      if (tokenInfo.address === "native") {
-        // For Arc native USDC, getBalance returns 18 decimals
-        // But for consistency with USDC standard, we compare using 6 decimals
-        balance = await arcClient.getBalance({ address: address as Address });
-      } else if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
+      if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
         balance = (await arcClient.readContract({
           address: tokenInfo.address as Address,
           abi: erc20Abi,
