@@ -36,6 +36,7 @@ type AppKitChainIdentifier =
   | "Solana";
 
 function toAppKitChain(chainName: string): AppKitChainIdentifier {
+  // AppKit expects Arc testnet as "Arc_Testnet" (official enum casing).
   const key = chainName.trim().toLowerCase();
   if (key === "arc" || key === "arc_testnet" || key === "arc-testnet") return "Arc_Testnet";
   if (key === "ethereum" || key === "eth") return "Ethereum";
@@ -65,6 +66,7 @@ export async function appKitSend(params: {
   token: string;
 }) {
   const { circleAddress, recipient, amount, token } = params;
+  const normalizedToken = token.toUpperCase();
   const result = await kit.send({
     from: {
       adapter: getCircleAdapter(),
@@ -73,10 +75,7 @@ export async function appKitSend(params: {
     },
     to: recipient,
     amount,
-    token:
-      token.toUpperCase() === ARC_NATIVE_TOKEN_SYMBOL
-        ? "NATIVE"
-        : token.toUpperCase(),
+    token: normalizedToken === ARC_NATIVE_TOKEN_SYMBOL ? "NATIVE" : normalizedToken,
   });
 
   return {

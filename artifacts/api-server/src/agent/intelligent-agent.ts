@@ -138,6 +138,7 @@ const arcClient = createPublicClient({
   transport: http(),
 });
 
+// Arc Testnet canonical USDC contract address used by Circle/AppKit chain definitions.
 const DEFAULT_ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
 const DEFAULT_ARC_EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 
@@ -266,6 +267,7 @@ export class IntelligentAgent {
 
       // ── Scheduled tasks ────────────────────────────────────────────────
       if (analysis.isScheduled && analysis.scheduleTrigger) {
+        // Scheduling is intentionally disabled until persistent job storage/execution is added.
         return {
           success: false,
           message:
