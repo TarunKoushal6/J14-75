@@ -36,23 +36,30 @@ import {
 } from "../lib/circle-client.js";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// LLM API Helper - Uses Replit's built-in AI or configurable endpoint
+// LLM API Helper - DeepSeek chat completions
 // ──────────────────────────────────────────────────────────────────────────────
 async function callLLM(
   messages: Array<{ role: "system" | "user"; content: string }>,
   options?: { json_mode?: boolean }
 ): Promise<string> {
-  // Try Replit's built-in AI API first (available when running on Replit)
-  const replitApiUrl = process.env.REPLIT_AI_API_URL || "https://replit.com/ai/api/chat";
-  
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const deepseekApiUrl =
+    process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions";
+
+  if (!apiKey) {
+    console.warn("⚠️ DEEPSEEK_API_KEY not set, using fallback parsing");
+    return simpleIntentParse(messages[messages.length - 1]?.content || "");
+  }
+
   try {
-    // Option 1: Replit AI API (when running on Replit)
-    const res = await fetch(replitApiUrl, {
+    const res = await fetch(deepseekApiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
+        model: "deepseek-v3.2",
         messages,
         temperature: 0.3,
         max_tokens: 2048,
@@ -65,8 +72,7 @@ async function callLLM(
       return data.choices?.[0]?.message?.content ?? data.response ?? "";
     }
     
-    // Fallback: Use simple rule-based parsing if no LLM available
-    console.warn("⚠️ LLM API unavailable, using fallback parsing");
+    console.warn(`⚠️ DeepSeek API unavailable (${res.status}), using fallback parsing`);
     return simpleIntentParse(messages[messages.length - 1]?.content || "");
   } catch (err: any) {
     console.warn("⚠️ LLM call failed:", err.message);
@@ -253,7 +259,7 @@ export class IntelligentAgent {
       }
 
       // ── Step 1: LLM intent parse ──────────────────────────────────────
-      const analysis = await this.analyzeWithGroq(msg);
+      const analysis = await this.analyzeWithLLM(msg);
       console.log("🔍 Intent:", JSON.stringify(analysis));
 
       // ── Impossible tasks ───────────────────────────────────────────────
@@ -289,7 +295,7 @@ export class IntelligentAgent {
   // ─────────────────────────────────────────────────────────────────────────
   // LLM: parse intent to JSON
   // ─────────────────────────────────────────────────────────────────────────
-  private async analyzeWithGroq(message: string): Promise<AIAnalysis> {
+  private async analyzeWithLLM(message: string): Promise<AIAnalysis> {
     const content = await callLLM(
       [
         {
