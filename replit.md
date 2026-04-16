@@ -154,7 +154,7 @@ Secrets required:
 Use this checklist when deploying the monorepo to Vercel.
 
 - [ ] **Framework Preset**: `Other` (or `Vite` if auto-detected for frontend build)
-- [ ] **Root Directory**: repository root (`/home/runner/work/J14-75/J14-75`)
+- [ ] **Root Directory**: repository root (`.` in Vercel project settings)
 - [ ] **Build Command**: `pnpm --filter @workspace/j14-75 build`
 - [ ] **Output Directory**: `artifacts/j14-75/dist/public`
 - [ ] **API Route Mapping**: `/api/*` -> `artifacts/api-server/src/vercel.ts`
