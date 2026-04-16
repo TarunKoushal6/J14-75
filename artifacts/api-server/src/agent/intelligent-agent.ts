@@ -43,8 +43,11 @@ async function callLLM(
   options?: { json_mode?: boolean }
 ): Promise<string> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
-  const deepseekApiUrl =
+  const deepseekBaseUrl =
     process.env.DEEPSEEK_API_URL || "https://integrate.api.nvidia.com/v1";
+  const deepseekApiUrl = deepseekBaseUrl.endsWith("/chat/completions")
+    ? deepseekBaseUrl
+    : `${deepseekBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
   if (!apiKey) {
     console.warn("⚠️ DEEPSEEK_API_KEY not set, using fallback parsing");
