@@ -44,7 +44,7 @@ async function callLLM(
 ): Promise<string> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   const deepseekApiUrl =
-    process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions";
+    process.env.DEEPSEEK_API_URL || "https://integrate.api.nvidia.com/v1";
 
   if (!apiKey) {
     console.warn("⚠️ DEEPSEEK_API_KEY not set, using fallback parsing");
