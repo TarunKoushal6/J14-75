@@ -15,7 +15,7 @@ import { arcTestnet } from "viem/chains";
 // ──────────────────────────────────────────────────────────────────────────────
 export const arcPublicClient = createPublicClient({
   chain: arcTestnet,
-  transport: http(),
+  transport: http("https://rpc.testnet.arc.network"),
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -137,6 +137,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   const match = wallets.find(
     (w: any) =>
       w.refId === lower ||
+      w.address?.toLowerCase() === lower ||
       (w.metadata && JSON.parse(w.metadata || "{}").userAddress === lower)
   );
 
@@ -154,7 +155,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
 
   // Create a new wallet for this user
   const createRes = await client.createWallets({
-    blockchains: ["ETH"] as any, // Circle EVM keys work on any EVM chain incl. Arc Testnet
+    blockchains: ["ARC-TESTNET"] as any,
     count: 1,
     walletSetId,
     metadata: [

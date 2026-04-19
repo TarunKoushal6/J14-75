@@ -2,21 +2,32 @@
   "version": 2,
   "builds": [
     {
-      "src": "artifacts/api-server/src/index.ts",
+      "src": "artifacts/api-server/src/vercel.ts",
       "use": "@vercel/node",
       "config": {
         "includeFiles": ["artifacts/api-server/**/*"]
+      }
+    },
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "artifacts/j14-75/dist/public",
+        "buildCommand": "pnpm --filter @workspace/j14-75 build"
       }
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "artifacts/api-server/src/index.ts"
+      "dest": "artifacts/api-server/src/vercel.ts"
+    },
+    {
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",
-      "dest": "artifacts/j14-75/dist/index.html"
+      "dest": "/index.html"
     }
   ],
   "env": {

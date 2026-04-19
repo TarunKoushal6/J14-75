@@ -58,13 +58,13 @@ Express 5 API server with the J14-75 Intelligent Agent. Uses Arc App Kit for rea
 - Entry: `src/index.ts` — reads `PORT`, starts Express
 - App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
 - Routes: `src/routes/chat.ts` — POST `/api/chat` — main AI agent endpoint
-- Agent: `src/agent/intelligent-agent.ts` — Groq intent parser → App Kit execution
+- Agent: `src/agent/intelligent-agent.ts` — DeepSeek intent parser → App Kit execution
 - App Kit: `src/lib/app-kit.ts` — Arc App Kit + Circle Wallets adapter (send/bridge)
 - Blockscout helpers: `src/lib/circle-client.ts` — ArcscanAPI balance/tx fetchers + legacy Circle SDK wallet creation
 
 **Agent execution pipeline:**
-1. Groq `llama-3.3-70b-versatile` parses intent → strict JSON (no hallucinations)
-2. Fast-paths: balance/history → ArcscanAPI (Blockscout) directly, no Groq needed
+1. DeepSeek `deepseek-v3.2` parses intent → strict JSON (no hallucinations)
+2. Fast-paths: balance/history → ArcscanAPI (Blockscout) directly, no LLM call needed
 3. Transfer: `kit.send()` via `createCircleWalletsAdapter` → real txHash on Arc Testnet
 4. Bridge: `kit.bridge()` via `createCircleWalletsAdapter` → CCTP cross-chain USDC
 5. Swap: **NOT supported on Arc Testnet** (documented testnet limitation) → clear error message
@@ -79,7 +79,7 @@ Express 5 API server with the J14-75 Intelligent Agent. Uses Arc App Kit for rea
 Secrets required:
 - `CIRCLE_API_KEY` — Circle Developer API key
 - `CIRCLE_ENTITY_SECRET` — Circle entity secret
-- `GROQ_API_KEY` — Groq API key
+- `DEEPSEEK_API_KEY` — DeepSeek API key
 - `BLOCKSCOUT_API_KEY` — ArcscanAPI key (Blockscout software)
 - `ARC_EURC_ADDRESS` (optional) — EURC ERC-20 contract address on Arc Testnet
 
@@ -148,3 +148,38 @@ Secrets required:
 - `CIRCLE_API_KEY` — Circle Developer API key
 - `CIRCLE_ENTITY_SECRET` — Circle entity secret (backup in `scripts/recovery.dat`)
 - `GROQ_API_KEY` — Groq API key (needed only for `agent` script)
+
+## Vercel Deployment Checklist
+
+Use this checklist when deploying the monorepo to Vercel.
+
+- [ ] **Framework Preset**: `Other` (or `Vite` if auto-detected for frontend build)
+- [ ] **Root Directory**: repository root (`.` in Vercel project settings)
+- [ ] **Build Command**: `pnpm --filter @workspace/j14-75 build`
+- [ ] **Output Directory**: `artifacts/j14-75/dist/public`
+- [ ] **API Route Mapping**: `/api/*` -> `artifacts/api-server/src/vercel.ts`
+- [ ] **Environment Variables (Vercel Project Settings)**:
+  - [ ] `NODE_ENV=production`
+  - [ ] `VITE_API_URL=<your-api-url>` (or same-origin `/api` deployment URL)
+- [ ] **Required Backend Secrets (Vercel Project Settings)**:
+  - [ ] `CIRCLE_API_KEY`
+  - [ ] `CIRCLE_ENTITY_SECRET`
+- [ ] **Package Manager**: `pnpm` (lockfile `pnpm-lock.yaml` present)
+- [ ] Trigger fresh deploy using **Redeploy** with **Clear build cache**
+- [ ] Validate deploy logs:
+  - [ ] Frontend build succeeds
+  - [ ] `/api` serverless function is created
+- [ ] Smoke test production deployment:
+  - [ ] `/` loads successfully
+  - [ ] `/api/...` endpoint returns expected 200/valid response
+
+### Repository-side Vercel config (already set)
+
+- `vercel.json` static build:
+  - `buildCommand: pnpm --filter @workspace/j14-75 build`
+  - `distDir: artifacts/j14-75/dist/public`
+- `vercel.json` API build/route:
+  - `src: artifacts/api-server/src/vercel.ts` with `@vercel/node`
+  - route `/api/(.*)` -> `artifacts/api-server/src/vercel.ts`
+- API serverless entrypoint:
+  - `artifacts/api-server/src/vercel.ts` exports Express app (no `listen`)
