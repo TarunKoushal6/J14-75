@@ -1,8 +1,8 @@
 /**
- * J14-75 Intelligent Agent — powered by Arc App Kit + DeepSeek LLM
+ * J14-75 Intelligent Agent — powered by Circle Arc skills + GPT-5.5 via Freemodel
  *
  * Execution pipeline:
- *   1. DeepSeek LLM                → parse user intent → strict JSON
+ *   1. GPT-5.5 via Freemodel       → parse user intent → strict JSON
  *   2. Smart routing               → transfer/bridge/swap/query
  *   3. App Kit send/bridge/swap    → real on-chain execution
  *      – kit.send()   for transfers on Arc Testnet
@@ -13,7 +13,7 @@
  * Adapter: @circle-fin/adapter-circle-wallets
  *   – Circle Developer-Controlled Wallets
  *   – CIRCLE_API_KEY + CIRCLE_ENTITY_SECRET env vars
- *   – DeepSeek API for intent analysis (DEEPSEEK_API_KEY)
+ *   – Freemodel/OpenAI-compatible API for intent analysis (FREEMODEL_API_KEY)
  */
 import { formatUnits, parseUnits, Address, erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
@@ -21,7 +21,6 @@ import { createPublicClient, http } from "viem";
 
 // App Kit
 import {
-  kit,
   getOrCreateAgentWallet,
   appKitSend,
   appKitBridge,
@@ -35,109 +34,7 @@ import {
   fetchTransactionHistory,
 } from "../lib/circle-client.js";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// LLM API Helper - DeepSeek chat completions
-// ──────────────────────────────────────────────────────────────────────────────
-async function callLLM(
-  messages: Array<{ role: "system" | "user"; content: string }>,
-  options?: { json_mode?: boolean }
-): Promise<string> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  const deepseekBaseUrl =
-    process.env.DEEPSEEK_API_URL || "https://integrate.api.nvidia.com/v1";
-  const deepseekApiUrl = deepseekBaseUrl.endsWith("/chat/completions")
-    ? deepseekBaseUrl
-    : `${deepseekBaseUrl.replace(/\/+$/, "")}/chat/completions`;
-
-  if (!apiKey) {
-    console.warn("⚠️ DEEPSEEK_API_KEY not set, using fallback parsing");
-    return simpleIntentParse(messages[messages.length - 1]?.content || "");
-  }
-
-  try {
-    const res = await fetch(deepseekApiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "deepseek-v3.2",
-        messages,
-        temperature: 0.3,
-        max_tokens: 2048,
-        ...(options?.json_mode && { response_format: { type: "json_object" } }),
-      }),
-    });
-
-    if (res.ok) {
-      const data = await res.json() as any;
-      return data.choices?.[0]?.message?.content ?? data.response ?? "";
-    }
-    
-    console.warn(`⚠️ DeepSeek API unavailable (${res.status}), using fallback parsing`);
-    return simpleIntentParse(messages[messages.length - 1]?.content || "");
-  } catch (err: any) {
-    console.warn("⚠️ LLM call failed:", err.message);
-    // Fallback to simple parsing
-    return simpleIntentParse(messages[messages.length - 1]?.content || "");
-  }
-}
-
-// Simple rule-based intent parsing fallback
-function simpleIntentParse(message: string): string {
-  const lower = message.toLowerCase();
-  const amountMatch = lower.match(/(\d+(?:\.\d+)?)/);
-  const addressMatch = message.match(/0x[a-fA-F0-9]{40}/);
-  const amount = amountMatch ? Number(amountMatch[1]) : 1;
-  
-  // Check for transfer intent
-  if (lower.includes("send") || lower.includes("transfer") || lower.includes("pay")) {
-    return JSON.stringify({
-      taskTypes: ["transfer"],
-      entities: {
-        tokens: [lower.includes("eurc") ? "EURC" : "USDC"],
-        amounts: [amount],
-        addresses: addressMatch ? [addressMatch[0]] : [],
-      },
-      isScheduled: false
-    });
-  }
-  
-  // Check for bridge intent
-  if (lower.includes("bridge") || lower.includes("cctp")) {
-    return JSON.stringify({
-      taskTypes: ["bridge"],
-      entities: { tokens: ["USDC"], toChain: "Ethereum" },
-      isScheduled: false
-    });
-  }
-  
-  // Check for swap intent
-  if (lower.includes("swap") || lower.includes("exchange")) {
-    return JSON.stringify({
-      taskTypes: ["swap"],
-      entities: { tokenIn: "USDT", tokenOut: "USDC" },
-      isScheduled: false
-    });
-  }
-  
-  // Check for balance intent
-  if (lower.includes("balance") || lower.includes("how much") || lower.includes("check")) {
-    return JSON.stringify({
-      taskTypes: ["query"],
-      entities: {},
-      isScheduled: false
-    });
-  }
-  
-  // Default: query
-  return JSON.stringify({
-    taskTypes: ["query"],
-    entities: {},
-    isScheduled: false
-  });
-}
+import { callLLM } from "../lib/llm.js";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Arc Testnet public client (for balance validation only)
@@ -146,10 +43,6 @@ const arcClient = createPublicClient({
   chain: arcTestnet,
   transport: http(),
 });
-
-// Arc Testnet canonical USDC contract address used by Circle/AppKit chain definitions.
-const DEFAULT_ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
-const DEFAULT_ARC_EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Known tokens on Arc Testnet
@@ -169,13 +62,13 @@ const KNOWN_TOKENS: Record<
   }
 > = {
   USDC: { 
-    address: process.env.ARC_USDC_ADDRESS ?? DEFAULT_ARC_USDC_ADDRESS,
+    address: "native", 
     symbol: "USDC",
     nativeDecimals: 18,  // Native gas uses 18 decimals
     erc20Decimals: 6,    // ERC-20 operations use 6 decimals
   },
   EURC: {
-    address: process.env.ARC_EURC_ADDRESS ?? DEFAULT_ARC_EURC_ADDRESS,
+    address: process.env.ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED",
     symbol: "EURC",
     nativeDecimals: 6,
     erc20Decimals: 6,
@@ -276,11 +169,19 @@ export class IntelligentAgent {
 
       // ── Scheduled tasks ────────────────────────────────────────────────
       if (analysis.isScheduled && analysis.scheduleTrigger) {
-        // Scheduling is intentionally disabled until persistent job storage/execution is added.
+        const taskId = `task_${Date.now()}`;
+        scheduledTasks.set(taskId, {
+          id: taskId,
+          type: analysis.taskTypes[0] ?? "unknown",
+          trigger: analysis.scheduleTrigger,
+          status: "active",
+          createdAt: new Date(),
+        });
         return {
-          success: false,
-          message:
-            "❌ Scheduled execution is not enabled in this deployment. Please submit the transaction when you want it executed.",
+          success: true,
+          message: `⏰ Scheduled! ID: ${taskId}\nWill execute when: ${analysis.scheduleTrigger}`,
+          taskId,
+          isScheduled: true,
         };
       }
 
@@ -384,6 +285,14 @@ Output schema is same as before.`,
         message: `❌ Unsupported token: ${token}. Arc Testnet supports USDC and EURC only.`,
       };
     }
+    if (tokenInfo.address === "EURC_NOT_DEPLOYED") {
+      return {
+        success: false,
+        message:
+          "❌ EURC is not deployed on Arc Testnet yet. Set ARC_EURC_ADDRESS environment variable.",
+      };
+    }
+
     // Get the agent's Circle wallet
         // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
     const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
@@ -507,7 +416,7 @@ Output schema is same as before.`,
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SWAP — kit.swap()
+  // SWAP — kit.swap() with KIT_KEY
   // Swap is mainnet-only per Arc docs. We route swap requests to mainnet
   // chains. The user should specify which chain (defaults to Ethereum mainnet).
   // Gas Station policy is attached when isEmailUser=true.
@@ -525,6 +434,13 @@ Output schema is same as before.`,
       return {
         success: false,
         message: "❌ Swap requires an amount. Example: 'Swap 10 USDT for USDC on Ethereum'",
+      };
+    }
+
+    if (!process.env.KIT_KEY) {
+      return {
+        success: false,
+        message: "❌ KIT_KEY is not configured. Swap requires a Circle Kit Key from the Console.",
       };
     }
 
@@ -547,6 +463,7 @@ Output schema is same as before.`,
       tokenIn: tokenIn.toUpperCase(),
       tokenOut: tokenOut.toUpperCase(),
       amountIn: amountIn.toFixed(6),
+      gasSponsorPolicyId,
     });
 
     const stepSummary = steps
@@ -613,24 +530,32 @@ Never hallucinate transaction data. Be concise and helpful.`,
     const decimals = tokenInfo.erc20Decimals;
 
     try {
-      balance = (await arcClient.readContract({
-        address: tokenInfo.address as Address,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [address as Address],
-      })) as bigint;
+      if (tokenInfo.address === "native") {
+        // For Arc native USDC, getBalance returns 18 decimals
+        // But for consistency with USDC standard, we compare using 6 decimals
+        balance = await arcClient.getBalance({ address: address as Address });
+      } else if (tokenInfo.address !== "EURC_NOT_DEPLOYED") {
+        balance = (await arcClient.readContract({
+          address: tokenInfo.address as Address,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [address as Address],
+        })) as bigint;
+      } else {
+        return; // Can't validate — skip
+      }
 
       const required = parseUnits(requiredAmount.toString(), decimals);
       const have = parseFloat(formatUnits(balance, decimals));
 
-      if (balance < required) {
+                        if (balance < required) {
         throw new Error(
           `❌ Insufficient ${token} balance in your wallet.\n` +
           `You have ${have.toFixed(4)} ${token} but need ${requiredAmount}.\n\n` +
           `Please add funds to: ${address}\n` +
           `After funding, try the transaction again.`
         );
-      }
+                      }
     } catch (err: any) {
       if (err.message?.includes("Insufficient")) throw err;
       console.warn(`⚠️ Balance check skipped: ${err.message}`);

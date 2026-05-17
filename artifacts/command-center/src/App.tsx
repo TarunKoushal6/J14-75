@@ -259,7 +259,7 @@ function EmailSignInPanel({
         Powered by Circle · Gasless wallet auto-created
       </div>
 
-      {(authState.step === "idle" || authState.step === "email_input" || authState.step === "loading") && authState.step !== "otp_input" && (
+      {(authState.step === "idle" || authState.step === "email_input" || authState.step === "loading") && (
         <form onSubmit={handleEmailSubmit} className="flex flex-col gap-2">
           <input
             ref={emailRef}
@@ -544,6 +544,15 @@ function TypingIndicator() {
       </div>
     </motion.div>
   );
+}
+
+
+declare global {
+  interface Window {
+    ethereum?: {
+      request: (args: { method: string; params?: unknown[] }) => Promise<any>;
+    };
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

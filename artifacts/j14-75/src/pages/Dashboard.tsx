@@ -18,10 +18,7 @@ import {
 } from "viem";
 
 // ── Constants ──────────────────────────────────────────────────────────────
-// Normalize env URLs so both with/without trailing slash work consistently.
-const stripTrailingSlash = (value: string) => value.replace(/\/$/, "");
-const ARC_TESTNET_RPC = stripTrailingSlash(import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network");
-const ARC_EXPLORER_URL = stripTrailingSlash(import.meta.env.VITE_ARC_EXPLORER_URL || "https://testnet.arcscan.app");
+const ARC_TESTNET_RPC = "https://rpc.testnet.arc.network";
 const ARC_CHAIN_ID_HEX = "0x4CEF52"; // 5042002
 const ARC_CHAIN_ID_NUM = 5042002;
 const REPUTATION_REGISTRY = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
@@ -38,7 +35,7 @@ const arcTestnet = {
     public: { http: [ARC_TESTNET_RPC] },
   },
   blockExplorers: {
-    default: { name: "Arc Explorer", url: ARC_EXPLORER_URL },
+    default: { name: "Arc Explorer", url: "https://explorer.testnet.arc.network" },
   },
 } as const;
 
@@ -48,7 +45,7 @@ const arcTestnet = {
 const PREDEFINED_TOKENS: Record<string, { address: string; decimals: number; isNative: boolean }> = {
   USDC: { address: "native", decimals: 18, isNative: true },
   EURC: {
-    address: import.meta.env.VITE_ARC_EURC_ADDRESS ?? "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+    address: import.meta.env.VITE_ARC_EURC_ADDRESS ?? "EURC_NOT_DEPLOYED",
     decimals: 6,
     isNative: false,
   },
@@ -498,7 +495,7 @@ function ChatMessage({
         {/* TxHash badge */}
         {message.txHash && (
           <a
-            href={`${ARC_EXPLORER_URL}/tx/${message.txHash}`}
+            href={`https://explorer.testnet.arc.network/tx/${message.txHash}`}
             target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg w-fit group"
             style={{ background: "rgba(255,107,0,0.12)", border: "1px solid rgba(255,107,0,0.25)" }}
@@ -698,7 +695,7 @@ export default function Dashboard() {
               chainName: "Arc Testnet",
               nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
               rpcUrls: [ARC_TESTNET_RPC],
-               blockExplorerUrls: [ARC_EXPLORER_URL],
+              blockExplorerUrls: ["https://explorer.testnet.arc.network"],
             }],
           });
         } else {
@@ -714,13 +711,63 @@ export default function Dashboard() {
     }
   }, []);
 
-  const [circleAuthLoading, setCircleAuthLoading] = useState(false);
+  // ── Circle Web3 SDK Initialization ────────────────────────────────────────
+  useEffect(() => {
+    // Initialize Circle Web3 SDK with required parameters
+    const initCircleSDK = async () => {
+      try {
+        const appConfig = {
+          appId: import.meta.env.VITE_APP_ID || "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+          clientUrl: import.meta.env.VITE_CLIENT_URL || "https://modular-sdk.circle.com/v1/rpc/w3s/buidl",
+          clientKey: import.meta.env.VITE_TEST_CLIENT_KEY || "",
+        };
+        console.log("🔵 Circle Web3 SDK initialized:", { appId: appConfig.appId, clientUrl: appConfig.clientUrl });
+        // Store for later use in wallet operations
+        (window as any).__circleConfig = appConfig;
+      } catch (err) {
+        console.error("❌ Failed to initialize Circle SDK:", err);
+      }
+    };
+    initCircleSDK();
+  }, []);
 
-  // ── Email login handler (backend-authenticated Circle wallet mapping) ─────
+  // ── Real Circle W3SSdk initialization ─────────────────────────────────────
+  const [sdk, setSdk] = useState<any>(null);
+  const [circleAuthLoading, setCircleAuthLoading] = useState(false);
+  const [circleAuthError, setCircleAuthError] = useState("");
+
+  useEffect(() => {
+    const initW3SSdk = async () => {
+      try {
+        // Lazy-load W3SSdk to avoid top-level import issues
+        const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk");
+        const w3sSdk = new W3SSdk({
+          appSettings: {
+            appId: import.meta.env.VITE_APP_ID || "a0e6512a-7b09-5cf8-a07c-fbe88f4c0e6c",
+          },
+        });
+        setSdk(w3sSdk);
+        console.log("✅ Circle W3SSdk initialized");
+      } catch (err: any) {
+        console.error("❌ Failed to initialize W3SSdk:", err);
+        setCircleAuthError("SDK initialization failed");
+      }
+    };
+    initW3SSdk();
+  }, []);
+
+  // ── Email login handler (triggers Circle native OTP popup) ────────────────
   const handleEmailLogin = useCallback(async (email: string) => {
+    if (!sdk) {
+      setCircleAuthError("SDK not ready");
+      return;
+    }
+
     setCircleAuthLoading(true);
+    setCircleAuthError("");
 
     try {
+      // Step 1: Call backend to initiate email OTP flow
       const res = await fetch(`${API_BASE_URL}/api/auth/email/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -733,21 +780,70 @@ export default function Dashboard() {
       }
 
       const data = await res.json();
-      const walletAddress = data?.existingWallet?.address ?? data?.walletAddress;
-      if (walletAddress) {
-        setWallet({ connected: true, address: walletAddress, chain: "ARC-TESTNET" });
+      const { userToken, encryptionKey, challengeId, existingWallet } = data;
+
+      // Handle existing wallet (already initialized user)
+      if (existingWallet?.address) {
+        setWallet({ connected: true, address: existingWallet.address, chain: "ARC-TESTNET" });
         setIsEmailUser(true);
-        console.log("✅ Email user authenticated:", walletAddress);
+        console.log("✅ Existing email user authenticated:", existingWallet.address);
         return;
       }
-      throw new Error("No wallet address returned by auth API");
+
+      if (!userToken || !encryptionKey || !challengeId) {
+        throw new Error("Backend missing required auth params");
+      }
+
+      // Step 2: Set authentication in SDK
+      console.log("🔐 Setting up Circle authentication...");
+      sdk.setAuthentication({ userToken, encryptionKey });
+
+      // Step 3: Execute the challenge (triggers OTP email + PIN setup)
+      console.log("🔐 Executing wallet initialization challenge...");
+      
+      const result = await new Promise<any>((resolve, reject) => {
+        sdk.execute(challengeId, (error: any, result: any) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        });
+      });
+
+      // Step 4: User is now logged in - fetch wallet details
+      if (result?.status === "COMPLETE" || result?.status === "success") {
+        // Get user wallets from backend
+        const walletsRes = await fetch(`${API_BASE_URL}/api/auth/email/verify-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+
+        if (!walletsRes.ok) {
+          throw new Error("Failed to fetch wallet details");
+        }
+
+        const walletData = await walletsRes.json();
+        
+        if (walletData.walletAddress) {
+          setWallet({ connected: true, address: walletData.walletAddress, chain: "ARC-TESTNET" });
+          setIsEmailUser(true);
+          console.log("✅ Email user authenticated:", walletData.walletAddress);
+        } else {
+          throw new Error("No wallet address returned");
+        }
+      } else {
+        throw new Error("Circle authentication failed or was cancelled");
+      }
     } catch (err: any) {
       console.error("Email login error:", err);
+      setCircleAuthError(err.message || "Authentication failed");
       alert("Email login error: " + err.message);
     } finally {
       setCircleAuthLoading(false);
     }
-  }, []);
+  }, [sdk]);
 
   const signOut = useCallback(() => {
     setWallet({ connected: false, address: "", chain: "" });
@@ -937,7 +1033,7 @@ export default function Dashboard() {
                   const email = prompt("Enter your email:");
                   if (email) await handleEmailLogin(email);
                 }}
-                disabled={circleAuthLoading}
+                disabled={circleAuthLoading || !sdk}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold disabled:opacity-60"
                 style={{ background: "rgba(255,107,0,0.1)", border: "1px solid rgba(255,107,0,0.25)", color: "#FF6B00" }}>
                 <Mail size={12} />
