@@ -10,8 +10,7 @@ import {
 } from "viem";
 import { arcTestnet } from "viem/chains";
 
-type FetchResponse = globalThis.Response;
-const fetchJson = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<FetchResponse>;
+const fetchJson = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<any>;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Arc Testnet public client (for broadcasting and receipt polling)
