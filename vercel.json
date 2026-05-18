@@ -4,14 +4,14 @@
   "outputDirectory": "artifacts/j14-75/dist/public",
   "installCommand": "corepack enable && corepack prepare pnpm@10.3.0 --activate && pnpm install --frozen-lockfile",
   "functions": {
-    "artifacts/api-server/src/vercel.ts": {
+    "api/index.ts": {
       "includeFiles": "artifacts/api-server/**/*"
     }
   },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/artifacts/api-server/src/vercel.ts"
+      "destination": "/api/index"
     },
     {
       "source": "/(.*)",
