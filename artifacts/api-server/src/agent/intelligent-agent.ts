@@ -540,7 +540,7 @@ Never hallucinate transaction data. Be concise and helpful.`,
           abi: erc20Abi,
           functionName: "balanceOf",
           args: [address as Address],
-        })) as bigint;
+        } as any)) as bigint;
       } else {
         return; // Can't validate — skip
       }
