@@ -88,7 +88,8 @@ export async function callLLM(messages: LLMMessage[], options: LLMOptions = {}):
   }
 
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const llmFetch = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<any>;
+    const res = await llmFetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
