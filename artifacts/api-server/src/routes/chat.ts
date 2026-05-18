@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { IntelligentAgent } from "../agent/intelligent-agent";
+import { IntelligentAgent } from "../agent/intelligent-agent.js";
 
 const router = Router();
 

@@ -1,8 +1,8 @@
-import express, { type Application } from "express";
+import express from "express";
 import cors from "cors";
-import router from "./routes";
+import router from "./routes/index.js";
 
-const app: Application = express();
+const app = express();
 
 app.use(cors());
 app.use(express.json());
