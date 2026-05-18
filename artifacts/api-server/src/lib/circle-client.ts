@@ -379,50 +379,66 @@ function getBlockscoutApiKey(): string | null {
 }
 
 export async function fetchTokenBalances(userAddress: string): Promise<string> {
-  // Arc Testnet Blockscout doesn't require API key for read operations
-  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/token-balances`;
-  console.log(`📦 ArcscanAPI → token-balances for ${userAddress}`);
+  const address = userAddress as Address;
 
-  const res = await fetchJson(url);
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`ArcscanAPI error ${res.status}: ${body.slice(0, 200)}`);
-    return `⚠️ Failed to fetch token balances (HTTP ${res.status}). The Arc Testnet explorer may be temporarily unavailable.`;
-  }
-
-  const data = (await res.json()) as any;
-  const tokens: any[] = data.items ?? data.result ?? [];
-
-  // Also fetch native balance (Arc USDC is native gas token - 18 decimals for gas, 6 for ERC-20)
-  const nativeUrl = `${ARCSCAN_BASE}/addresses/${userAddress}`;
-  let nativeBalance = "0";
+  // Prefer direct Arc RPC. Explorer APIs are optional and may be unavailable.
   try {
-    const nativeRes = await fetchJson(nativeUrl);
-    if (nativeRes.ok) {
-      const nativeData = (await nativeRes.json()) as any;
-      const raw = nativeData.coin_balance ?? nativeData.balance ?? "0";
-      // Native USDC on Arc uses 18 decimals for gas, but balance display is same as ERC-20
-      nativeBalance = formatUnits(BigInt(raw), 18);
-    }
-  } catch {}
+    const [nativeRaw, erc20Raw] = await Promise.all([
+      arcPublicClient.getBalance({ address }),
+      arcPublicClient.readContract({
+        address: (process.env.ARC_USDC_ADDRESS ?? "0x3600000000000000000000000000000000000000") as Address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+      } as any) as Promise<bigint>,
+    ]);
 
-  const lines: string[] = [`• USDC (native): ${parseFloat(nativeBalance).toFixed(4)}`];
+    const nativeBalance = formatUnits(nativeRaw, 18);
+    const erc20Balance = formatUnits(erc20Raw, 6);
 
-  for (const item of tokens) {
-    try {
-      const symbol = item.token?.symbol ?? item.symbol ?? "UNKNOWN";
-      const decimals = parseInt(item.token?.decimals ?? item.decimals ?? "18", 10);
-      const raw = item.value ?? item.token_value ?? "0";
-      const balance = formatUnits(BigInt(raw), decimals);
-      const addr = (item.token?.address ?? item.token_address ?? "0x????").slice(0, 8);
-      lines.push(`• ${symbol} (${addr}...): ${parseFloat(balance).toFixed(4)}`);
-    } catch {
-      lines.push(`• ${item.token?.symbol ?? "?"}: (parse error)`);
-    }
+    return [
+      "✅ Balances on Arc Testnet:",
+      `• USDC (ERC-20): ${Number(erc20Balance).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+      `• USDC (native gas): ${Number(nativeBalance).toLocaleString(undefined, { maximumFractionDigits: 6 })}`,
+      "",
+      "Source: Arc Testnet RPC",
+    ].join("\n");
+  } catch (rpcErr: any) {
+    console.error("Arc RPC balance fetch failed:", rpcErr?.message ?? rpcErr);
   }
 
-  return `✅ Balances on Arc Testnet:\n${lines.join("\n")}`;
+  // Best-effort explorer fallback only. Never throw raw fetch errors to UI.
+  try {
+    const url = `${ARCSCAN_BASE}/addresses/${userAddress}/token-balances`;
+    console.log(`📦 ArcscanAPI → token-balances for ${userAddress}`);
+    const res = await fetchJson(url);
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`ArcscanAPI error ${res.status}: ${body.slice(0, 200)}`);
+      return `⚠️ Balance unavailable right now. Arc RPC and explorer both failed. Please try again in a minute.`;
+    }
+
+    const data = (await res.json()) as any;
+    const tokens: any[] = data.items ?? data.result ?? [];
+    const lines: string[] = [];
+    for (const item of tokens) {
+      try {
+        const symbol = item.token?.symbol ?? item.symbol ?? "UNKNOWN";
+        const decimals = parseInt(item.token?.decimals ?? item.decimals ?? "18", 10);
+        const raw = item.value ?? item.token_value ?? "0";
+        const balance = formatUnits(BigInt(raw), decimals);
+        const addr = (item.token?.address ?? item.token_address ?? "0x????").slice(0, 8);
+        lines.push(`• ${symbol} (${addr}...): ${parseFloat(balance).toFixed(4)}`);
+      } catch {
+        lines.push(`• ${item.token?.symbol ?? "?"}: (parse error)`);
+      }
+    }
+    return `✅ Balances on Arc Testnet:\n${lines.length ? lines.join("\n") : "• No token balances found."}`;
+  } catch (err: any) {
+    console.error("Balance fetch failed:", err?.message ?? err);
+    return `⚠️ Balance unavailable right now. Arc data source failed: ${err?.message ?? "unknown error"}.`;
+  }
 }
 
 export async function fetchTransactionHistory(userAddress: string): Promise<string> {
