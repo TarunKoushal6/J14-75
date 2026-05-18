@@ -7,7 +7,7 @@ const router = Router();
 const agent = new IntelligentAgent();
 
 // ── Route ─────────────────────────────────────────────────────────────────
-router.post("/", async (req, res) => {
+router.post("/", async (req: any, res: any) => {
     const { message, walletAddress, isEmailUser = false, history = [] } = req.body as {
     message: string;
     walletAddress?: string;
