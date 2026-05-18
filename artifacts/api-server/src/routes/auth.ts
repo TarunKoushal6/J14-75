@@ -11,7 +11,7 @@ function emailUserKey(email: string) {
   return `email:${normalizeEmail(email)}`;
 }
 
-router.post("/email/send-otp", async (req, res) => {
+router.post("/email/send-otp", async (req: any, res: any) => {
   const { email } = req.body as { email?: string };
 
   if (!email || !email.includes("@")) {
@@ -39,7 +39,7 @@ router.post("/email/send-otp", async (req, res) => {
   }
 });
 
-router.post("/email/verify-otp", async (req, res) => {
+router.post("/email/verify-otp", async (req: any, res: any) => {
   const { email } = req.body as { email?: string };
 
   if (!email || !email.includes("@")) {
