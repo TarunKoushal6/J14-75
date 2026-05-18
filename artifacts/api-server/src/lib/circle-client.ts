@@ -442,38 +442,49 @@ export async function fetchTokenBalances(userAddress: string): Promise<string> {
 }
 
 export async function fetchTransactionHistory(userAddress: string): Promise<string> {
-  // Arc Testnet Blockscout doesn't require API key for read operations
-  const url = `${ARCSCAN_BASE}/addresses/${userAddress}/transactions`;
-  console.log(`📜 ArcscanAPI → transactions for ${userAddress}`);
+  const address = userAddress as Address;
 
-  const res = await fetchJson(url);
+  // Direct RPC cannot list full transaction history without an indexer, but it can
+  // provide reliable account activity basics even when explorer APIs are down.
+  try {
+    const [blockNumber, txCount] = await Promise.all([
+      arcPublicClient.getBlockNumber(),
+      arcPublicClient.getTransactionCount({ address }),
+    ]);
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`ArcscanAPI error ${res.status}: ${body.slice(0, 200)}`);
-    return `⚠️ Failed to fetch transaction history (HTTP ${res.status}). The Arc Testnet explorer may be temporarily unavailable.`;
-  }
-
-  const data = (await res.json()) as any;
-  const txs: any[] = data.items ?? data.result ?? [];
-
-  if (txs.length === 0) {
-    return "✅ No transactions found for this address on Arc Testnet.";
-  }
-
-  const rows = txs.slice(0, 10).map((tx: any) => {
+    // Best-effort explorer attempt for recent rows. If it fails, return RPC facts.
     try {
-      const ts = parseInt(tx.block_timestamp ?? tx.timestamp ?? "0");
-      const date = ts > 0 ? new Date(ts * 1000).toLocaleString() : "unknown date";
-      const ok = tx.result === "success" || tx.status === "ok" ? "✅" : "❌";
-      const hash = (tx.hash ?? tx.transaction_hash ?? "").slice(0, 12) + "...";
-      const from = (tx.from?.hash ?? tx.from_address ?? "0x????").slice(0, 8) + "...";
-      const to = (tx.to?.hash ?? tx.to_address ?? "0x????").slice(0, 8) + "...";
-      return `${ok} ${date} | ${hash} | ${from} → ${to}`;
-    } catch {
-      return "• (parse error)";
+      const url = `${ARCSCAN_BASE}/addresses/${userAddress}/transactions`;
+      console.log(`📜 ArcscanAPI → transactions for ${userAddress}`);
+      const res = await fetchJson(url);
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const txs: any[] = data.items ?? data.result ?? [];
+        if (txs.length > 0) {
+          const rows = txs.slice(0, 10).map((tx: any) => {
+            const ts = parseInt(tx.block_timestamp ?? tx.timestamp ?? "0");
+            const date = ts > 0 ? new Date(ts * 1000).toLocaleString() : "unknown date";
+            const ok = tx.result === "success" || tx.status === "ok" ? "✅" : "❌";
+            const hash = tx.hash ?? tx.tx_hash ?? "?";
+            return `${ok} ${hash.slice(0, 10)}… — ${date}`;
+          });
+          return `✅ Recent Arc Testnet transactions:\n${rows.join("\n")}`;
+        }
+      }
+    } catch (explorerErr: any) {
+      console.warn("Arc explorer transaction history unavailable:", explorerErr?.message ?? explorerErr);
     }
-  });
 
-  return `✅ Last ${Math.min(10, txs.length)} transactions:\n${rows.join("\n")}`;
+    return [
+      "✅ Arc Testnet account activity:",
+      `• Address: ${userAddress}`,
+      `• Transaction count / nonce: ${txCount}`,
+      `• Latest block: ${blockNumber.toString()}`,
+      "",
+      "Full transaction history requires an explorer indexer; Arc RPC fallback is active.",
+    ].join("\n");
+  } catch (err: any) {
+    console.error("Transaction history fetch failed:", err?.message ?? err);
+    return `⚠️ Transaction history unavailable right now: ${err?.message ?? "unknown error"}.`;
+  }
 }

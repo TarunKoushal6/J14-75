@@ -35,7 +35,7 @@ const arcTestnet = {
     public: { http: [ARC_TESTNET_RPC] },
   },
   blockExplorers: {
-    default: { name: "Arc Explorer", url: "https://explorer.testnet.arc.network" },
+    default: { name: "Arc Explorer", url: "https://testnet.arcscan.app" },
   },
 } as const;
 
@@ -495,7 +495,7 @@ function ChatMessage({
         {/* TxHash badge */}
         {message.txHash && (
           <a
-            href={`https://explorer.testnet.arc.network/tx/${message.txHash}`}
+            href={`https://testnet.arcscan.app/tx/${message.txHash}`}
             target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg w-fit group"
             style={{ background: "rgba(255,107,0,0.12)", border: "1px solid rgba(255,107,0,0.25)" }}
@@ -695,7 +695,7 @@ export default function Dashboard() {
               chainName: "Arc Testnet",
               nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
               rpcUrls: [ARC_TESTNET_RPC],
-              blockExplorerUrls: ["https://explorer.testnet.arc.network"],
+              blockExplorerUrls: ["https://testnet.arcscan.app"],
             }],
           });
         } else {

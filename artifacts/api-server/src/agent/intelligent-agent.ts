@@ -150,7 +150,7 @@ export class IntelligentAgent {
         lower.includes("past transaction") ||
         (lower.includes("transaction") && !lower.includes("transfer"))
       ) {
-        console.log("📜 Fast-path: history → Blockscout");
+        console.log("📜 Fast-path: history → Arc RPC / explorer fallback");
         return { success: true, message: await fetchTransactionHistory(context.userAddress) };
       }
 
@@ -205,8 +205,8 @@ export class IntelligentAgent {
         {
           role: "system",
                     content: `You are J14-75, the best Web3 AI agent on Arc Testnet.
-You can detect ANY ERC-20 token using Blockscout API.
-Supported actions: transfer, bridge (USDC via CCTP), swap any token, balance check, history, query.
+You can use Arc Testnet RPC for balances and basic on-chain reads.
+Supported actions: transfer, bridge (USDC via CCTP), balance check, history, query. Swap requires KIT_KEY and may be unavailable on Arc Testnet.
 Always return ONLY valid JSON. No extra text.
 For swap: set tokenIn, tokenOut, amounts[0] as amountIn.
 Never mark normal tasks as "impossible".
