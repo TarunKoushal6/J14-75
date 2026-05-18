@@ -10,6 +10,9 @@ import {
 } from "viem";
 import { arcTestnet } from "viem/chains";
 
+type FetchResponse = globalThis.Response;
+const fetchJson = globalThis.fetch as unknown as (input: string, init?: RequestInit) => Promise<FetchResponse>;
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Arc Testnet public client (for broadcasting and receipt polling)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -381,7 +384,7 @@ export async function fetchTokenBalances(userAddress: string): Promise<string> {
   const url = `${ARCSCAN_BASE}/addresses/${userAddress}/token-balances`;
   console.log(`📦 ArcscanAPI → token-balances for ${userAddress}`);
 
-  const res = await fetch(url);
+  const res = await fetchJson(url);
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -396,7 +399,7 @@ export async function fetchTokenBalances(userAddress: string): Promise<string> {
   const nativeUrl = `${ARCSCAN_BASE}/addresses/${userAddress}`;
   let nativeBalance = "0";
   try {
-    const nativeRes = await fetch(nativeUrl);
+    const nativeRes = await fetchJson(nativeUrl);
     if (nativeRes.ok) {
       const nativeData = (await nativeRes.json()) as any;
       const raw = nativeData.coin_balance ?? nativeData.balance ?? "0";
@@ -428,7 +431,7 @@ export async function fetchTransactionHistory(userAddress: string): Promise<stri
   const url = `${ARCSCAN_BASE}/addresses/${userAddress}/transactions`;
   console.log(`📜 ArcscanAPI → transactions for ${userAddress}`);
 
-  const res = await fetch(url);
+  const res = await fetchJson(url);
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
