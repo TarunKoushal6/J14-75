@@ -26,26 +26,18 @@ export const arcPublicClient = createPublicClient({
 // ──────────────────────────────────────────────────────────────────────────────
 let circleClient: ReturnType<typeof initiateDeveloperControlledWalletsClient> | null = null;
 
-// Helper to clean API key (remove TEST_API_KEY: prefix if present)
-function cleanApiKey(apiKey: string | undefined): string {
-  if (!apiKey) return "";
-  // Remove common prefixes that might be added
-  const prefixes = ["TEST_API_KEY:", "LIVE_API_KEY:", "api_key:", "key:"];
-  let cleaned = apiKey.trim();
-  for (const prefix of prefixes) {
-    if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
-      cleaned = cleaned.slice(prefix.length);
-    }
-  }
-  return cleaned.trim();
+function normalizeApiKey(apiKey: string | undefined): string {
+  // Circle Developer-Controlled Wallets API keys must keep their full
+  // PREFIX:ID:SECRET shape (for example TEST_API_KEY:...:...).
+  // Do not strip the prefix; that causes Circle SDK auth to fail with 401.
+  return (apiKey ?? "").trim();
 }
 
 export function getCircleClient() {
   if (circleClient) return circleClient;
 
-  // Clean the API key to remove any prefixes
   const rawApiKey = process.env.CIRCLE_API_KEY;
-  const apiKey = cleanApiKey(rawApiKey);
+  const apiKey = normalizeApiKey(rawApiKey);
   const entitySecret = process.env.CIRCLE_ENTITY_SECRET || process.env.CIRCLE_ENTITY_KEY;
 
   if (!apiKey || !entitySecret) {

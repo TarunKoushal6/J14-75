@@ -23,6 +23,7 @@ export async function getOrCreateAgentWallet(userAddress: string) {
 }
 
 export async function appKitSend(params: {
+  circleWalletId?: string;
   circleAddress: string;
   recipient: string;
   amount: string;
@@ -37,7 +38,7 @@ export async function appKitSend(params: {
   }
 
   const amountWei = parseUnits(params.amount, isNative ? 18 : 6);
-  const { circleWalletId } = await getOrCreateCircleWallet(params.circleAddress);
+  const circleWalletId = params.circleWalletId ?? (await getOrCreateCircleWallet(params.circleAddress)).circleWalletId;
 
   const txHash = await signAndBroadcastTransfer({
     circleWalletId,

@@ -295,7 +295,7 @@ Output schema is same as before.`,
 
     // Get the agent's Circle wallet
         // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
-    const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+    const { circleWalletId, circleAddress } = await getOrCreateAgentWallet(context.userAddress);
     console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     // Validate total balance before attempting
@@ -309,6 +309,7 @@ Output schema is same as before.`,
 
       console.log(`💸 kit.send(): ${amount} ${token} → ${recipient}`);
       const { txHash, explorerUrl } = await appKitSend({
+        circleWalletId,
         circleAddress,
         recipient,
         amount,
@@ -331,7 +332,7 @@ Output schema is same as before.`,
       const amount = (amounts[i] ?? amounts[0]).toFixed(6);
 
       console.log(`📦 Batch [${i + 1}/${addresses.length}]: ${amount} ${token} → ${recipient}`);
-      const { txHash } = await appKitSend({ circleAddress, recipient, amount, token });
+      const { txHash } = await appKitSend({ circleWalletId, circleAddress, recipient, amount, token });
       logs.push(`  [${i + 1}] ${recipient.slice(0, 10)}... → ${amount} ${token} | tx: ${txHash.slice(0, 14)}...`);
       lastTxHash = txHash;
     }
@@ -385,7 +386,7 @@ Output schema is same as before.`,
     }
 
         // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
-    const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+    const { circleWalletId, circleAddress } = await getOrCreateAgentWallet(context.userAddress);
     console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     // Validate balance if sending from Arc
@@ -445,7 +446,7 @@ Output schema is same as before.`,
     }
 
         // PERMANENT: User's actual Circle wallet is being used (wallet connect or email for both)
-    const { circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+    const { circleWalletId, circleAddress } = await getOrCreateAgentWallet(context.userAddress);
     console.log(`✅ REAL USER WALLET MAPPED → User: ${context.userAddress} | Circle: ${circleAddress} | EmailUser: ${context.isEmailUser}`);
 
     const gasSponsorPolicyId = context.isEmailUser
