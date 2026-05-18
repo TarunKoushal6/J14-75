@@ -5,7 +5,12 @@
   "installCommand": "corepack enable && corepack prepare pnpm@10.3.0 --activate && pnpm install --frozen-lockfile",
   "functions": {
     "api/index.ts": {
-      "includeFiles": "artifacts/api-server/**/*"
+      "includeFiles": [
+        "artifacts/api-server/src/**",
+        "artifacts/api-server/package.json",
+        "lib/**/dist/**",
+        "lib/**/package.json"
+      ]
     }
   },
   "rewrites": [
