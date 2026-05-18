@@ -1,37 +1,24 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "artifacts/api-server/src/vercel.ts",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["artifacts/api-server/**/*"]
-      }
-    },
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "artifacts/j14-75/dist/public",
-        "buildCommand": "pnpm --filter @workspace/j14-75 build"
-      }
+  "buildCommand": "pnpm --filter @workspace/j14-75 build",
+  "outputDirectory": "artifacts/j14-75/dist/public",
+  "installCommand": "corepack enable && corepack prepare pnpm@10.3.0 --activate && pnpm install --frozen-lockfile",
+  "functions": {
+    "artifacts/api-server/src/vercel.ts": {
+      "includeFiles": "artifacts/api-server/**/*"
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "artifacts/api-server/src/vercel.ts"
+      "source": "/api/(.*)",
+      "destination": "/artifacts/api-server/src/vercel.ts"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "pnpm_version": "10.3.0"
+  }
 }
