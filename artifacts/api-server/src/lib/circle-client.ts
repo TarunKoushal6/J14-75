@@ -66,11 +66,13 @@ export function describeCircleError(err: any): string {
   const code = err?.code ?? payload?.code;
   const circleMsg = payload?.message ?? payload?.error ?? payload?.errors?.[0]?.message;
   const msg = circleMsg ?? err?.message ?? "Unknown Circle error";
-  const details = payload && typeof payload === "object" ? JSON.stringify(payload).slice(0, 500) : "";
+  const details = payload && typeof payload === "object" ? JSON.stringify(payload).slice(0, 1000) : "";
+  const stackTop = err?.stack ? String(err.stack).split("\n").slice(0, 4).join(" | ") : "";
   const parts = [msg];
   if (status) parts.push(`status ${status}`);
   if (code) parts.push(`code ${code}`);
   if (details && !details.includes(msg)) parts.push(details);
+  if (stackTop && !stackTop.includes(msg)) parts.push(stackTop);
   return parts.join(" | ");
 }
 
@@ -166,6 +168,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   circleWalletId: string;
   circleAddress: string;
 }> {
+  try {
   const lower = userAddress.toLowerCase();
 
   // Return cached entry
@@ -229,6 +232,9 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
     `✅ Created Circle wallet ${newWallet.id} (${newWallet.address}) for user ${userAddress}`
   );
   return entry;
+  } catch (err: any) {
+    throw new Error(`Circle wallet mapping failed: ${describeCircleError(err)}`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
