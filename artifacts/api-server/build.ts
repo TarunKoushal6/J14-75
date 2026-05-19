@@ -61,7 +61,7 @@ async function buildAll() {
   );
 
   await esbuild({
-    entryPoints: [path.resolve(__dirname, "src/index.ts")],
+    entryPoints: [path.resolve(__dirname, "src/vercel.ts")],
     platform: "node",
     bundle: true,
     format: "cjs",
