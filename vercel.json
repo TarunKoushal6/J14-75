@@ -1,11 +1,11 @@
 {
   "version": 2,
-  "buildCommand": "pnpm --filter @workspace/j14-75 build",
+  "buildCommand": "pnpm --filter @workspace/api-server build && pnpm --filter @workspace/j14-75 build",
   "outputDirectory": "artifacts/j14-75/dist/public",
   "installCommand": "corepack enable && corepack prepare pnpm@10.3.0 --activate && pnpm install --frozen-lockfile",
   "functions": {
     "api/index.ts": {
-      "includeFiles": "{artifacts/api-server/src/**,artifacts/api-server/package.json,lib/**/dist/**,lib/**/package.json}"
+      "includeFiles": "artifacts/api-server/dist/**"
     }
   },
   "rewrites": [

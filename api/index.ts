@@ -1,1 +1,1 @@
-export { default } from "../artifacts/api-server/src/vercel.js";
+export { default } from "../artifacts/api-server/dist/index.cjs";
