@@ -216,7 +216,7 @@ export class IntelligentAgent {
 
     if (["/help", "/commands"].includes(cmd)) return { success: true, message: help };
     if (cmd === "/status") {
-      return { success: true, message: "✅ J14-75 status:\n• Network: Arc Testnet (5042002)\n• Balance/history: Arc RPC enabled\n• Send: Circle SDK transfer enabled\n• Swap/bridge: route checks enabled\n• LLM bypass: slash commands enabled" };
+      return { success: true, message: "✅ J14-75 status:\n• Network: Arc Testnet (5042002)\n• Balance/history: Arc RPC enabled\n• Send: Circle App Kit enabled\n• Swap: Circle App Kit enabled • Bridge: pending route hardening\n• LLM bypass: slash commands enabled" };
     }
     if (cmd === "/features") {
       return { success: true, message: [
