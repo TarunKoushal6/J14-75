@@ -61,13 +61,16 @@ export function getCircleClient() {
 }
 
 export function describeCircleError(err: any): string {
-  const status = err?.status ?? err?.response?.status;
-  const code = err?.code ?? err?.response?.data?.code;
-  const msg = err?.message ?? err?.response?.data?.message ?? "Unknown Circle error";
-  const circleMsg = err?.response?.data?.message || err?.error?.response?.data?.message;
-  const parts = [circleMsg || msg];
+  const payload = err?.response?.data ?? err?.error?.response?.data ?? err?.data ?? err?.error;
+  const status = err?.status ?? err?.response?.status ?? err?.error?.response?.status;
+  const code = err?.code ?? payload?.code;
+  const circleMsg = payload?.message ?? payload?.error ?? payload?.errors?.[0]?.message;
+  const msg = circleMsg ?? err?.message ?? "Unknown Circle error";
+  const details = payload && typeof payload === "object" ? JSON.stringify(payload).slice(0, 500) : "";
+  const parts = [msg];
   if (status) parts.push(`status ${status}`);
   if (code) parts.push(`code ${code}`);
+  if (details && !details.includes(msg)) parts.push(details);
   return parts.join(" | ");
 }
 
@@ -85,7 +88,6 @@ export async function createCircleTransfer(params: {
       destinationAddress: params.recipient,
       amount: [params.amount],
       tokenAddress: params.tokenAddress,
-      blockchain: (params.blockchain ?? "ARC-TESTNET") as any,
       fee: { type: "level", config: { feeLevel: "HIGH" } } as any,
       idempotencyKey: crypto.randomUUID(),
     } as any);

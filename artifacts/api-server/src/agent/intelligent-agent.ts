@@ -189,9 +189,11 @@ export class IntelligentAgent {
       return await this.route(analysis, context);
     } catch (err: any) {
       console.error("❌ Agent error:", err);
+      const rawMessage = err instanceof Error ? err.message : "Unknown error";
+      const nested = err?.cause?.message || err?.response?.data?.message || err?.error?.response?.data?.message;
       return {
         success: false,
-        message: `🚨 ${err instanceof Error ? err.message : "Unknown error"}`,
+        message: `🚨 ${nested ? `${rawMessage} | ${nested}` : rawMessage}`,
       };
     }
   }
