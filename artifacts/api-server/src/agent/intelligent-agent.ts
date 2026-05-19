@@ -244,7 +244,10 @@ Output schema is same as before.`,
     const types = analysis.taskTypes;
 
     if (types.includes("swap")) {
-      return this.executeSwap(analysis.entities, context);
+      return {
+        success: false,
+        message: "❌ Swap execution is disabled on Arc Testnet in this build. Send and balance are supported; swap needs a supported Circle App Kit route before enabling.",
+      };
     }
 
     if (types.includes("transfer") || types.includes("batch")) {
