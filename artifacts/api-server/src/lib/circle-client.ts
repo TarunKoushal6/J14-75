@@ -54,6 +54,7 @@ export function getCircleClient() {
   circleClient = initiateDeveloperControlledWalletsClient({
     apiKey,
     entitySecret,
+    baseUrl: process.env.CIRCLE_BASE_URL || "https://api-sandbox.circle.com",
   });
 
   console.log("✅ Circle Developer-Controlled Wallets SDK initialised.");
