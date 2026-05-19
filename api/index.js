@@ -1,7 +1,6 @@
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const handler = require("../artifacts/api-server/dist/index.cjs");
 
-export default function api(req: any, res: any) {
+module.exports = function api(req, res) {
   const app = handler.default ?? handler;
   return app(req, res);
-}
+};

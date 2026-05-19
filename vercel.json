@@ -4,7 +4,7 @@
   "outputDirectory": "artifacts/j14-75/dist/public",
   "installCommand": "corepack enable && corepack prepare pnpm@10.3.0 --activate && pnpm install --frozen-lockfile",
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "includeFiles": "artifacts/api-server/dist/**"
     }
   },
