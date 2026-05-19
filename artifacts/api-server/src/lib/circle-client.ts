@@ -133,7 +133,7 @@ async function getOrCreateWalletSet(): Promise<string> {
   const client = getCircleClient();
 
   // Try to find an existing wallet set named "J14-75"
-  const listRes = await client.listWalletSets({ pageSize: 10 });
+  const listRes = await client.listWalletSets();
   const sets = listRes.data?.walletSets ?? [];
   const existing = sets.find((ws: any) => ws.name === "J14-75-AgentWallets");
 
@@ -179,7 +179,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   // Search for an existing wallet with this user's address in its metadata
   const listRes = await client.listWallets({
     walletSetId,
-    pageSize: 50,
+    refId: lower,
   });
 
   const wallets = listRes.data?.wallets ?? [];
@@ -209,7 +209,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
     walletSetId,
     metadata: [
       {
-        name: `J14-75 Agent Wallet for ${userAddress.slice(0, 8)}`,
+        name: `J14-75 ${userAddress.slice(0, 8)}`,
         refId: lower,
       },
     ],
