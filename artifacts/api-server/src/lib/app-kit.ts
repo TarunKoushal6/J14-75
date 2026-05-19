@@ -5,7 +5,7 @@
 
 import { createPublicClient, http, formatUnits, parseUnits, Address, erc20Abi } from "viem";
 import { arcTestnet } from "viem/chains";
-import { getOrCreateCircleWallet, signAndBroadcastTransfer } from "./circle-client.js";
+import { getOrCreateCircleWallet, signAndBroadcastTransfer, createCircleTransfer } from "./circle-client.js";
 
 export const ARC_TESTNET_CHAIN_ID = 5042002;
 export const ARC_TESTNET_RPC_URL = process.env.ARC_TESTNET_RPC_URL || "https://rpc.testnet.arc.network";
@@ -37,21 +37,22 @@ export async function appKitSend(params: {
     throw new Error("ARC_EURC_ADDRESS is not configured.");
   }
 
-  const amountWei = parseUnits(params.amount, isNative ? 18 : 6);
   const circleWalletId = params.circleWalletId ?? (await getOrCreateCircleWallet(params.circleAddress)).circleWalletId;
 
-  const txHash = await signAndBroadcastTransfer({
+  // Prefer Circle SDK-native transfer. Raw signTransaction is a fallback only;
+  // Circle rejects some custom Arc raw tx payloads with 400.
+  const sdkTokenAddress = token === "EURC" ? tokenAddress! : ARC_USDC_ADDRESS;
+  const sdkTx = await createCircleTransfer({
     circleWalletId,
-    from: params.circleAddress as Address,
-    to: params.recipient as Address,
-    amountWei,
-    isNative,
-    tokenAddress,
+    recipient: params.recipient,
+    amount: params.amount,
+    tokenAddress: sdkTokenAddress,
+    blockchain: "ARC-TESTNET",
   });
 
   return {
-    txHash,
-    explorerUrl: `${ARC_TESTNET_EXPLORER_URL}/tx/${txHash}`,
+    txHash: sdkTx.txHash || sdkTx.transactionId,
+    explorerUrl: sdkTx.txHash ? `${ARC_TESTNET_EXPLORER_URL}/tx/${sdkTx.txHash}` : `Circle transaction: ${sdkTx.transactionId} (${sdkTx.state})`,
   };
 }
 

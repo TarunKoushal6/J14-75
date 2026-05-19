@@ -196,6 +196,81 @@ export class IntelligentAgent {
     }
   }
 
+  private async handleSlashCommand(context: TaskContext): Promise<TaskResult> {
+    const text = context.message.trim();
+    const parts = text.split(/\s+/);
+    const cmd = (parts[0] ?? "").toLowerCase();
+    const help = [
+      "J14-75 slash commands:",
+      "• /balance [address]",
+      "• /history [address]",
+      "• /send <amount> <USDC|EURC> <0xRecipient>",
+      "• /swap <amount> <tokenIn> <tokenOut> [chain]",
+      "• /bridge <amount> USDC <fromChain> <toChain> [recipient]",
+      "• /wallet",
+      "• /status",
+      "• /features",
+    ].join("\n");
+
+    if (["/help", "/commands"].includes(cmd)) return { success: true, message: help };
+    if (cmd === "/status") {
+      return { success: true, message: "✅ J14-75 status:\n• Network: Arc Testnet (5042002)\n• Balance/history: Arc RPC enabled\n• Send: Circle SDK transfer enabled\n• Swap/bridge: route checks enabled\n• LLM bypass: slash commands enabled" };
+    }
+    if (cmd === "/features") {
+      return { success: true, message: [
+        "Available / planned features:",
+        "• Deterministic / commands without LLM",
+        "• Balance, history, wallet, status",
+        "• Send USDC/EURC on Arc Testnet via Circle wallets",
+        "• Transfer previews + confirmations (next hardening step)",
+        "• Bridge via CCTP/Bridge Kit where route supported",
+        "• Swap only on supported Circle App Kit routes",
+        "• Tx watch/explain, allowance/approve, portfolio, env-check redacted",
+      ].join("\n") };
+    }
+    if (cmd === "/wallet") {
+      const { circleWalletId, circleAddress } = await getOrCreateAgentWallet(context.userAddress);
+      return { success: true, message: `✅ Wallet mapping:\n• Connected: ${context.userAddress}\n• Circle wallet: ${circleAddress}\n• Wallet ID: ${circleWalletId}` };
+    }
+    if (cmd === "/balance") {
+      return { success: true, message: await fetchTokenBalances(parts[1] ?? context.userAddress) };
+    }
+    if (cmd === "/history") {
+      return { success: true, message: await fetchTransactionHistory(parts[1] ?? context.userAddress) };
+    }
+    if (cmd === "/send") {
+      const amount = Number(parts[1]);
+      const token = (parts[2] ?? "USDC").toUpperCase();
+      const recipient = parts[3];
+      if (!Number.isFinite(amount) || amount <= 0 || !recipient?.startsWith("0x")) {
+        return { success: false, message: "Usage: /send <amount> <USDC|EURC> <0xRecipient>" };
+      }
+      return this.executeTransfer({ amounts: [amount], tokens: [token], addresses: [recipient] }, context);
+    }
+    if (cmd === "/swap") {
+      const amount = Number(parts[1]);
+      const tokenIn = (parts[2] ?? "").toUpperCase();
+      const tokenOut = (parts[3] ?? "").toUpperCase();
+      const chain = parts[4] ?? "Arc_Testnet";
+      if (!Number.isFinite(amount) || amount <= 0 || !tokenIn || !tokenOut) {
+        return { success: false, message: "Usage: /swap <amount> <tokenIn> <tokenOut> [chain]" };
+      }
+      return this.executeSwap({ amounts: [amount], tokenIn, tokenOut, swapChain: chain }, context);
+    }
+    if (cmd === "/bridge") {
+      const amount = Number(parts[1]);
+      const token = (parts[2] ?? "USDC").toUpperCase();
+      const fromChain = parts[3] ?? "Arc_Testnet";
+      const toChain = parts[4] ?? "Base_Sepolia";
+      const recipient = parts[5];
+      if (!Number.isFinite(amount) || amount <= 0 || token !== "USDC") {
+        return { success: false, message: "Usage: /bridge <amount> USDC <fromChain> <toChain> [recipient]" };
+      }
+      return this.executeBridge({ amounts: [amount], tokens: [token], fromChain, toChain, addresses: recipient ? [recipient] : undefined }, context);
+    }
+    return { success: false, message: `Unknown command: ${cmd}\n\n${help}` };
+}
+
   // ─────────────────────────────────────────────────────────────────────────
   // LLM: parse intent to JSON
   // ─────────────────────────────────────────────────────────────────────────
@@ -244,10 +319,7 @@ Output schema is same as before.`,
     const types = analysis.taskTypes;
 
     if (types.includes("swap")) {
-      return {
-        success: false,
-        message: "❌ Swap execution is disabled on Arc Testnet in this build. Send and balance are supported; swap needs a supported Circle App Kit route before enabling.",
-      };
+      return this.executeSwap(analysis.entities, context);
     }
 
     if (types.includes("transfer") || types.includes("batch")) {

@@ -60,6 +60,59 @@ export function getCircleClient() {
   return circleClient;
 }
 
+export function describeCircleError(err: any): string {
+  const status = err?.status ?? err?.response?.status;
+  const code = err?.code ?? err?.response?.data?.code;
+  const msg = err?.message ?? err?.response?.data?.message ?? "Unknown Circle error";
+  const circleMsg = err?.response?.data?.message || err?.error?.response?.data?.message;
+  const parts = [circleMsg || msg];
+  if (status) parts.push(`status ${status}`);
+  if (code) parts.push(`code ${code}`);
+  return parts.join(" | ");
+}
+
+export async function createCircleTransfer(params: {
+  circleWalletId: string;
+  recipient: string;
+  amount: string;
+  tokenAddress: string;
+  blockchain?: string;
+}): Promise<{ txHash: string; transactionId: string; state: string }> {
+  const client = getCircleClient();
+  try {
+    const createRes = await client.createTransaction({
+      walletId: params.circleWalletId,
+      destinationAddress: params.recipient,
+      amount: [params.amount],
+      tokenAddress: params.tokenAddress,
+      blockchain: (params.blockchain ?? "ARC-TESTNET") as any,
+      fee: { type: "level", config: { feeLevel: "HIGH" } } as any,
+      idempotencyKey: crypto.randomUUID(),
+    } as any);
+
+    const tx = (createRes as any).data?.transaction ?? (createRes as any).data;
+    const transactionId = tx?.id;
+    if (!transactionId) throw new Error("Circle createTransaction did not return transaction id.");
+
+    let state = tx?.state ?? "INITIATED";
+    let txHash = tx?.txHash ?? "";
+    for (let i = 0; i < 45 && !txHash && !["COMPLETE", "FAILED", "DENIED", "CANCELLED"].includes(state); i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const poll = await client.getTransaction({ id: transactionId } as any);
+      const ptx = (poll as any).data?.transaction ?? (poll as any).data;
+      state = ptx?.state ?? state;
+      txHash = ptx?.txHash ?? txHash;
+    }
+
+    if (["FAILED", "DENIED", "CANCELLED"].includes(state)) {
+      throw new Error(`Circle transaction ${state}. id=${transactionId}`);
+    }
+    return { txHash, transactionId, state };
+  } catch (err: any) {
+    throw new Error(`Circle transfer failed: ${describeCircleError(err)}`);
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // In-memory wallet registry: maps user EOA → Circle walletId + Circle address
 // In production this should be persisted to a database.
