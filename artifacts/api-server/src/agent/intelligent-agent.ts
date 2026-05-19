@@ -257,7 +257,7 @@ export class IntelligentAgent {
       if (!Number.isFinite(amount) || amount <= 0 || !tokenIn || !tokenOut) {
         return { success: false, message: "Usage: /swap <amount> <tokenIn> <tokenOut> [chain]" };
       }
-      return { success: false, message: `❌ Swap route unavailable for ${tokenIn} → ${tokenOut} on ${chain}. KIT_KEY is configured, but Arc Testnet needs a supported Circle App Kit route/liquidity before execution.` };
+      return this.executeSwap({ amounts: [amount], tokenIn, tokenOut, swapChain: chain }, context);
     }
     if (cmd === "/bridge") {
       const amount = Number(parts[1]);
@@ -321,10 +321,7 @@ Output schema is same as before.`,
     const types = analysis.taskTypes;
 
     if (types.includes("swap")) {
-      const tokenIn = (analysis.entities.tokenIn ?? analysis.entities.tokens?.[0] ?? "TOKEN").toUpperCase();
-      const tokenOut = (analysis.entities.tokenOut ?? analysis.entities.tokens?.[1] ?? "TOKEN").toUpperCase();
-      const chain = analysis.entities.swapChain ?? "Arc_Testnet";
-      return { success: false, message: `❌ Swap route unavailable for ${tokenIn} → ${tokenOut} on ${chain}. KIT_KEY is configured, but execution needs a supported Circle App Kit route/liquidity.` };
+      return this.executeSwap(analysis.entities, context);
     }
 
     if (types.includes("transfer") || types.includes("batch")) {
