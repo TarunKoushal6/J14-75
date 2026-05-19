@@ -10,6 +10,12 @@ const __dirname = path.dirname(__filename);
 // which helps cold start times without risking some
 // packages that are not bundle compatible
 const allowlist = [
+  "viem",
+  "cookie-parser",
+  "@circle-fin/developer-controlled-wallets",
+  "@circle-fin/app-kit",
+  "@circle-fin/adapter-viem-v2",
+  "@circle-fin/adapter-circle-wallets",
   "@google/generative-ai",
   "axios",
   "connect-pg-simple",
