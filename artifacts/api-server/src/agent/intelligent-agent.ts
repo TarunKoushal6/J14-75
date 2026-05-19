@@ -130,6 +130,11 @@ export class IntelligentAgent {
       const lower = msg.toLowerCase();
       console.log(`\n🤖 Agent: "${msg}"`);
 
+      // ── Fast-path: deterministic slash commands, no LLM ───────────────
+      if (msg.trim().startsWith("/")) {
+        return await this.handleSlashCommand(context);
+      }
+
       // ── Fast-path: balance ─────────────────────────────────────────────
       if (
         lower.includes("balance") ||
