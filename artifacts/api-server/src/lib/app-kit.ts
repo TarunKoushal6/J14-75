@@ -30,7 +30,12 @@ function getCircleWalletsAdapter() {
   if (!apiKey || !entitySecret) {
     throw new Error("CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are required for App Kit Circle Wallets adapter.");
   }
-  circleWalletsAdapter = createCircleWalletsAdapter({ apiKey, entitySecret });
+  const baseUrl = process.env.CIRCLE_BASE_URL?.trim();
+  circleWalletsAdapter = createCircleWalletsAdapter({
+    apiKey,
+    entitySecret,
+    ...(baseUrl ? { baseUrl } : {}),
+  });
   return circleWalletsAdapter;
 }
 

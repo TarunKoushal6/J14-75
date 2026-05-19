@@ -51,11 +51,11 @@ export function getCircleClient() {
 
   console.log("🔑 Using Circle API Key:", apiKey.slice(0, 8) + "..." + apiKey.slice(-4));
 
-  circleClient = initiateDeveloperControlledWalletsClient({
-    apiKey,
-    entitySecret,
-    baseUrl: process.env.CIRCLE_BASE_URL || "https://api-sandbox.circle.com",
-  });
+  const baseUrl = process.env.CIRCLE_BASE_URL?.trim();
+  const clientConfig: any = { apiKey, entitySecret };
+  if (baseUrl) clientConfig.baseUrl = baseUrl;
+
+  circleClient = initiateDeveloperControlledWalletsClient(clientConfig);
 
   console.log("✅ Circle Developer-Controlled Wallets SDK initialised.");
   return circleClient;
