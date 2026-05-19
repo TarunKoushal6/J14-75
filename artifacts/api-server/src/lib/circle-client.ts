@@ -168,6 +168,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   circleWalletId: string;
   circleAddress: string;
 }> {
+  let stage = "init";
   try {
   const lower = userAddress.toLowerCase();
 
@@ -178,6 +179,8 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
 
   const client = getCircleClient();
   const walletSetId = await getOrCreateWalletSet();
+
+  stage = "listWallets";
 
   // Search for an existing wallet with this user's address in its metadata
   const listRes = await client.listWallets({
@@ -206,6 +209,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   }
 
   // Create a new wallet for this user
+  stage = "createWallets";
   const createRes = await client.createWallets({
     blockchains: ["ARC-TESTNET"] as any,
     count: 1,
@@ -233,7 +237,7 @@ export async function getOrCreateCircleWallet(userAddress: string): Promise<{
   );
   return entry;
   } catch (err: any) {
-    throw new Error(`Circle wallet mapping failed: ${describeCircleError(err)}`);
+    throw new Error(`Circle wallet mapping failed (${stage}): ${describeCircleError(err)}`);
   }
 }
 
